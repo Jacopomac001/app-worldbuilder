@@ -126,6 +126,9 @@ export const UI_TEXT = {
   relationInversePlaceholder: "Relazione inversa opzionale... (es. ospita)",
   relationTargetPlaceholder: "Seleziona entità collegata",
   graphTagPlaceholder: "Seleziona un tag",
+  tagFilterPlaceholder: "Filtra per tag",
   selectedBadge: "Selezionata",
   duplicateSuffix: " (copia)",
+  emptyShortDescription: "Nessuna descrizione breve.",
+  emptyNotes: "Nessuna nota disponibile.",
 } as const;

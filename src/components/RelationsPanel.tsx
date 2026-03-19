@@ -12,7 +12,9 @@ import type { RelationPreset } from "../utils/entity";
 import {
   getEntityTypeLabel,
   getRelationTypeForPerspective,
+  getTypeColor,
 } from "../utils/entity";
+import { getEntityTypeIcon, uiIcons } from "../utils/icons";
 
 type RelationsPanelProps = {
   entities: Entity[];
@@ -30,6 +32,22 @@ type RelationsPanelProps = {
   onAddRelation: () => void;
   onDeleteRelation: (relationId: string) => void;
   getEntityById: (id: string) => Entity | undefined;
+};
+
+const sectionLabelStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  fontSize: "14px",
+  color: "#9ca3af",
+  marginBottom: "8px",
+  fontWeight: 700,
+};
+
+const relationMetaTextStyle: React.CSSProperties = {
+  fontSize: "12px",
+  color: "#9ca3af",
+  lineHeight: 1.45,
 };
 
 export default function RelationsPanel({
@@ -52,13 +70,83 @@ export default function RelationsPanel({
   const normalizedType = relationType.trim().toLowerCase();
   const matchingPreset =
     relationPresets.find((preset) => preset.type === normalizedType) ?? null;
+  const selectedAccent = getTypeColor(selectedEntity.type);
+  const SelectedEntityIcon = getEntityTypeIcon(selectedEntity.type);
 
   return (
-    <div style={panelStyle}>
-      <h2 style={{ marginTop: 0 }}>Relazioni</h2>
+    <div
+      style={{
+        ...panelStyle,
+        border: "1px solid rgba(148, 163, 184, 0.14)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "10px",
+          marginTop: 0,
+          marginBottom: "16px",
+        }}
+      >
+        <uiIcons.relations size={18} />
+        <h2 style={{ margin: 0 }}>Relazioni</h2>
+      </div>
 
-      <div style={{ ...cardStyle, marginBottom: "16px" }}>
-        <div style={{ fontSize: "14px", color: "#9ca3af", marginBottom: "8px" }}>
+      <div
+        style={{
+          ...cardStyle,
+          marginBottom: "16px",
+          display: "grid",
+          gap: "12px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            padding: "10px 12px",
+            borderRadius: "14px",
+            background: `${selectedAccent}12`,
+            border: `1px solid ${selectedAccent}33`,
+          }}
+        >
+          <div
+            style={{
+              width: "32px",
+              height: "32px",
+              borderRadius: "10px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: `${selectedAccent}22`,
+              border: `1px solid ${selectedAccent}44`,
+              flexShrink: 0,
+            }}
+          >
+            <SelectedEntityIcon size={16} color={selectedAccent} />
+          </div>
+
+          <div style={{ minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: "14px",
+                fontWeight: 800,
+                color: "#f3f4f6",
+                lineHeight: 1.2,
+              }}
+            >
+              {selectedEntity.name}
+            </div>
+            <div style={relationMetaTextStyle}>
+              {getEntityTypeLabel(selectedEntity.type)}
+            </div>
+          </div>
+        </div>
+
+        <div style={sectionLabelStyle}>
+          <uiIcons.newEntity size={14} />
           Crea nuova relazione
         </div>
 
@@ -105,14 +193,18 @@ export default function RelationsPanel({
                     onRelationInverseTypeChange(preset.inverseType ?? "");
                   }}
                   style={{
-                    backgroundColor: isActive ? "#2563eb" : "#1f2937",
-                    color: "white",
-                    border: "1px solid #374151",
+                    background: isActive
+                      ? "linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)"
+                      : "linear-gradient(180deg, #0f1726 0%, #0b1220 100%)",
+                    color: "#f8fafc",
+                    border: isActive
+                      ? "1px solid rgba(96,165,250,0.34)"
+                      : "1px solid rgba(148,163,184,0.14)",
                     borderRadius: "999px",
-                    padding: "6px 10px",
-                    cursor: "pointer",
+                    padding: "7px 10px",
                     fontSize: "12px",
-                    fontWeight: 600,
+                    fontWeight: 700,
+                    cursor: "pointer",
                   }}
                 >
                   {preset.type}
@@ -121,163 +213,202 @@ export default function RelationsPanel({
             })}
           </div>
 
-          <div style={{ fontSize: "12px", color: "#9ca3af", lineHeight: 1.5 }}>
-            Puoi usare un preset oppure scrivere una relazione libera.
-            <br />
-            Esempio: <strong>vive in</strong> / <strong>ospita</strong>
-            {matchingPreset?.inverseType ? (
-              <>
-                <br />
-                Preset rilevato: inversa suggerita{" "}
-                <strong>{matchingPreset.inverseType}</strong>
-              </>
-            ) : null}
-          </div>
+          {matchingPreset?.inverseType ? (
+            <div style={relationMetaTextStyle}>
+              Inverso suggerito: <strong>{matchingPreset.inverseType}</strong>
+            </div>
+          ) : null}
 
           <select
             value={relationTargetId}
-            onChange={(e) => onRelationTargetIdChange(e.target.value || "")}
+            onChange={(e) => onRelationTargetIdChange(e.target.value)}
             style={selectStyle}
           >
             <option value="">{UI_TEXT.relationTargetPlaceholder}</option>
             {availableRelationTargets.map((entity) => (
               <option key={entity.id} value={entity.id}>
-                {entity.name} ({getEntityTypeLabel(entity.type)})
+                {entity.name} — {getEntityTypeLabel(entity.type)}
               </option>
             ))}
           </select>
 
-          <button onClick={onAddRelation} style={primaryButtonStyle}>
+          <button
+            type="button"
+            onClick={onAddRelation}
+            style={{
+              ...primaryButtonStyle,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "8px",
+            }}
+          >
+            <uiIcons.relations size={15} />
             Aggiungi relazione
           </button>
         </div>
       </div>
 
-      <div style={{ fontSize: "14px", color: "#9ca3af", marginBottom: "8px" }}>
-        Relazioni dell'entità selezionata
-      </div>
-
-      {selectedEntityRelations.length === 0 ? (
+      <div style={{ ...cardStyle, display: "grid", gap: "12px" }}>
         <div
           style={{
-            fontSize: "14px",
-            color: "#9ca3af",
-            padding: "12px",
-            borderRadius: "12px",
-            backgroundColor: "#111827",
-            border: "1px solid #374151",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "12px",
+            flexWrap: "wrap",
           }}
         >
-          Nessuna relazione presente.
+          <div style={sectionLabelStyle}>
+            <uiIcons.relations size={14} />
+            Relazioni visibili
+          </div>
+
+          <div style={relationMetaTextStyle}>
+            {selectedEntityRelations.length} su {relations.length} totali
+          </div>
         </div>
-      ) : (
-        <div style={{ display: "grid", gap: "10px" }}>
-          {selectedEntityRelations.map((relation) => {
-            const fromEntity = getEntityById(relation.fromEntityId);
-            const toEntity = getEntityById(relation.toEntityId);
 
-            if (!fromEntity || !toEntity) return null;
+        {selectedEntityRelations.length === 0 ? (
+          <div style={relationMetaTextStyle}>
+            Nessuna relazione per questa entità.
+          </div>
+        ) : (
+          <div style={{ display: "grid", gap: "10px" }}>
+            {selectedEntityRelations.map((relation) => {
+              const isOutgoing = relation.fromEntityId === selectedEntity.id;
+              const otherEntityId = isOutgoing
+                ? relation.toEntityId
+                : relation.fromEntityId;
+              const otherEntity = getEntityById(otherEntityId);
 
-            const isOutgoing = relation.fromEntityId === selectedEntity.id;
-            const direction = isOutgoing ? "outgoing" : "incoming";
+              const relationLabel = getRelationTypeForPerspective(
+                relation.type,
+                relation.inverseType,
+                isOutgoing ? "outgoing" : "incoming"
+              );
 
-            const semanticType = getRelationTypeForPerspective(
-              relation.type,
-              relation.inverseType,
-              direction
-            );
+              const accent = otherEntity ? getTypeColor(otherEntity.type) : "#64748b";
+              const OtherIcon = otherEntity
+                ? getEntityTypeIcon(otherEntity.type)
+                : null;
 
-            const subjectEntity = isOutgoing ? fromEntity : toEntity;
-            const objectEntity = isOutgoing ? toEntity : fromEntity;
-
-            return (
-              <div
-                key={relation.id}
-                style={{
-                  backgroundColor: "#111827",
-                  border: "1px solid #374151",
-                  borderRadius: "12px",
-                  padding: "12px",
-                }}
-              >
+              return (
                 <div
+                  key={relation.id}
                   style={{
-                    fontSize: "12px",
-                    color: isOutgoing ? "#93c5fd" : "#c4b5fd",
-                    marginBottom: "6px",
-                    fontWeight: 700,
+                    ...cardStyle,
+                    padding: "12px",
+                    display: "grid",
+                    gap: "10px",
+                    border: "1px solid rgba(148, 163, 184, 0.14)",
                   }}
                 >
-                  {isOutgoing ? "IN USCITA" : "IN ENTRATA · LETTURA SEMANTICA"}
-                </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      justifyContent: "space-between",
+                      gap: "10px",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: "10px", minWidth: 0 }}>
+                      {OtherIcon ? (
+                        <div
+                          style={{
+                            width: "30px",
+                            height: "30px",
+                            borderRadius: "10px",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            background: `${accent}22`,
+                            border: `1px solid ${accent}44`,
+                            flexShrink: 0,
+                          }}
+                        >
+                          <OtherIcon size={15} color={accent} />
+                        </div>
+                      ) : null}
 
-                <div style={{ fontSize: "14px", lineHeight: 1.5 }}>
-                  <strong>{subjectEntity.name}</strong> — {semanticType} →{" "}
-                  <strong>{objectEntity.name}</strong>
-                </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div
+                          style={{
+                            fontSize: "14px",
+                            fontWeight: 800,
+                            color: "#f3f4f6",
+                            lineHeight: 1.2,
+                            wordBreak: "break-word",
+                          }}
+                        >
+                          {otherEntity?.name ?? "Entità sconosciuta"}
+                        </div>
 
-                <div
-                  style={{
-                    marginTop: "8px",
-                    fontSize: "12px",
-                    color: "#9ca3af",
-                    lineHeight: 1.5,
-                  }}
-                >
-                  Salvata come: <strong>{fromEntity.name}</strong> — {relation.type} →{" "}
-                  <strong>{toEntity.name}</strong>
+                        <div style={relationMetaTextStyle}>
+                          {otherEntity
+                            ? getEntityTypeLabel(otherEntity.type)
+                            : "Entità non trovata"}
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => onDeleteRelation(relation.id)}
+                      style={{
+                        ...dangerButtonStyle,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "6px",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <uiIcons.delete size={14} />
+                    </button>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      width: "fit-content",
+                      padding: "6px 10px",
+                      borderRadius: "999px",
+                      background: isOutgoing
+                        ? "rgba(59,130,246,0.12)"
+                        : "rgba(168,85,247,0.12)",
+                      border: isOutgoing
+                        ? "1px solid rgba(59,130,246,0.28)"
+                        : "1px solid rgba(168,85,247,0.28)",
+                      color: "#f8fafc",
+                      fontSize: "12px",
+                      fontWeight: 800,
+                    }}
+                  >
+                    <uiIcons.relations size={13} />
+                    {isOutgoing ? "→" : "←"} {relationLabel}
+                  </div>
+
                   {relation.inverseType ? (
-                    <>
-                      <br />
-                      Inversa: <strong>{relation.inverseType}</strong>
-                    </>
-                  ) : null}
+                    <div style={relationMetaTextStyle}>
+                      Tipo base: <strong>{relation.type}</strong> · Inverso:{" "}
+                      <strong>{relation.inverseType}</strong>
+                    </div>
+                  ) : (
+                    <div style={relationMetaTextStyle}>
+                      Tipo base: <strong>{relation.type}</strong>
+                    </div>
+                  )}
                 </div>
+              );
+            })}
+          </div>
+        )}
 
-                <button
-                  onClick={() => onDeleteRelation(relation.id)}
-                  style={{ ...dangerButtonStyle, marginTop: "10px" }}
-                >
-                  Elimina relazione
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      <div style={{ marginTop: "16px", display: "grid", gap: "10px" }}>
-        <div
-          style={{
-            backgroundColor: "#111827",
-            border: "1px solid #374151",
-            borderRadius: "12px",
-            padding: "12px",
-          }}
-        >
-          Entità totali: {entities.length}
-        </div>
-
-        <div
-          style={{
-            backgroundColor: "#111827",
-            border: "1px solid #374151",
-            borderRadius: "12px",
-            padding: "12px",
-          }}
-        >
-          Relazioni totali: {relations.length}
-        </div>
-
-        <div
-          style={{
-            backgroundColor: "#111827",
-            border: "1px solid #374151",
-            borderRadius: "12px",
-            padding: "12px",
-          }}
-        >
-          Relazioni visibili: {selectedEntityRelations.length}
+        <div style={relationMetaTextStyle}>
+          Entità archiviate: <strong>{entities.length}</strong>
         </div>
       </div>
     </div>

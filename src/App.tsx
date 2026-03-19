@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MarkerType, type Edge, type Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { getEntityTypeIcon, uiIcons } from "./utils/icons";
 
 import Sidebar from "./components/Sidebar";
 import EntityEditor from "./components/EntityEditor";
 import GraphPanel from "./components/GraphPanel";
 import RelationsPanel from "./components/RelationsPanel";
+import NewEntityForm from "./components/NewEntityForm";
 
 import type {
   FocusedGraphFilter,
@@ -42,6 +44,7 @@ import {
   getEntityTypeLabel,
   getSuggestedInverseRelationType,
   getTypeColor,
+  getTypeIconGlyph,
   hasDuplicateEntityName,
   normalizeEntityName,
   normalizeMetadata,
@@ -73,6 +76,19 @@ type TimelineEvent = {
   stato: string;
   parsedYear: number | null;
   parsedOrder: number | null;
+};
+
+type GraphNodeData = {
+  label: string;
+  name: string;
+  typeLabel: string;
+  shortDescription: string;
+  iconGlyph: string;
+  accentColor: string;
+  isSelected?: boolean;
+  isConnectedToSelection?: boolean;
+  isDimmed?: boolean;
+  level?: 0 | 1 | 2;
 };
 
 function parseNumberLike(value: string | undefined): number | null {
@@ -271,51 +287,71 @@ function buildGraphElements(
   level1Ids?: Set<string>,
   level2Ids?: Set<string>
 ) {
-  const rawNodes: Node[] = localEntities.map((entity) => {
+  const connectedIds = new Set<string>();
+
+  if (selectedEntityId) {
+    localRelations.forEach((relation) => {
+      if (relation.fromEntityId === selectedEntityId) {
+        connectedIds.add(relation.toEntityId);
+      }
+      if (relation.toEntityId === selectedEntityId) {
+        connectedIds.add(relation.fromEntityId);
+      }
+    });
+  }
+
+  const rawNodes: Node<GraphNodeData>[] = localEntities.map((entity) => {
+    const accentColor = getTypeColor(entity.type);
+    const typeLabel = getEntityTypeLabel(entity.type);
     const isSelected = selectedEntityId === entity.id;
+    const isConnectedToSelection = connectedIds.has(entity.id);
     const inLevel0 = level0Ids?.has(entity.id) ?? false;
     const inLevel1 = level1Ids?.has(entity.id) ?? false;
     const inLevel2 = level2Ids?.has(entity.id) ?? false;
 
-    let border = "1px solid rgba(255,255,255,0.25)";
-    let fontWeight = 600;
-    let opacity = 1;
+    let level: 0 | 1 | 2 = 1;
 
-    if (isSelected || inLevel0) {
-      border = "3px solid #ffffff";
-      fontWeight = 800;
-    } else if (inLevel1) {
-      border = "2px solid rgba(255,255,255,0.85)";
-      fontWeight = 700;
-    } else if (inLevel2) {
-      border = "1px dashed rgba(255,255,255,0.5)";
-      fontWeight = 600;
-      opacity = 0.9;
-    }
+    if (isSelected || inLevel0) level = 0;
+    else if (inLevel1) level = 1;
+    else if (inLevel2) level = 2;
+
+    const isDimmed =
+      Boolean(selectedEntityId) &&
+      !isSelected &&
+      !isConnectedToSelection &&
+      !inLevel0 &&
+      !inLevel1;
 
     return {
       id: entity.id,
+      type: "worldNode",
       position: { x: 0, y: 0 },
       data: {
-        label: `${entity.name}\n${getEntityTypeLabel(entity.type)}`,
+        label: `${entity.name}\n${typeLabel}`,
+        name: entity.name,
+        typeLabel,
+        shortDescription: entity.shortDescription,
+        iconGlyph: getTypeIconGlyph(entity.type),
+        accentColor,
+        isSelected,
+        isConnectedToSelection,
+        isDimmed,
+        level,
       },
       style: {
-        background: getTypeColor(entity.type),
-        color: "#ffffff",
-        border,
-        borderRadius: "12px",
-        padding: "10px",
-        width: NODE_WIDTH,
-        textAlign: "center",
-        fontWeight,
-        opacity,
-        whiteSpace: "pre-line",
-        transition: "border 160ms ease, opacity 160ms ease",
+        width: NODE_WIDTH + 50,
+        background: "transparent",
+        border: "none",
+        padding: 0,
       },
     };
   });
 
   const rawEdges: Edge[] = localRelations.map((relation) => {
+    const touchesSelected =
+      relation.fromEntityId === selectedEntityId ||
+      relation.toEntityId === selectedEntityId;
+
     const isLevel1Edge =
       ((level0Ids?.has(relation.fromEntityId) ?? false) &&
         (level1Ids?.has(relation.toEntityId) ?? false)) ||
@@ -328,35 +364,54 @@ function buildGraphElements(
       ((level2Ids?.has(relation.fromEntityId) ?? false) &&
         (level1Ids?.has(relation.toEntityId) ?? false));
 
-    const stroke = isLevel1Edge
-      ? "#cbd5e1"
+    const stroke = touchesSelected
+      ? "#60a5fa"
+      : isLevel1Edge
+      ? "#94a3b8"
       : isLevel2Edge
-      ? "#64748b"
-      : "#475569";
+      ? "#475569"
+      : "#64748b";
+
+    const relationLabel =
+      typeof relation.type === "string" && relation.type.trim()
+        ? relation.type.trim()
+        : "relazione";
 
     return {
       id: relation.id,
       source: relation.fromEntityId,
       target: relation.toEntityId,
-      label: relation.type,
+      type: "smoothstep",
+      label: relationLabel,
+      data: {
+        label: relationLabel,
+      },
+      animated: touchesSelected || isLevel1Edge,
       style: {
         stroke,
-        strokeWidth: isLevel1Edge ? 2.5 : 1.8,
+        strokeWidth: touchesSelected ? 3 : isLevel1Edge ? 2.4 : 1.7,
+        opacity: touchesSelected ? 1 : isLevel2Edge ? 0.45 : 0.82,
       },
       markerEnd: {
         type: MarkerType.ArrowClosed,
         color: stroke,
-        width: 18,
-        height: 18,
+        width: touchesSelected ? 20 : 18,
+        height: touchesSelected ? 20 : 18,
       },
       labelStyle: {
-        fill: "#e5e7eb",
-        fontWeight: isLevel1Edge ? 700 : 500,
-        fontSize: isLevel1Edge ? 12 : 11,
+        fill: "#ffffff",
+        fontWeight: 800,
+        fontSize: 13,
       },
-      labelBgStyle: { fill: "#111827", fillOpacity: 0.9 },
-      labelBgPadding: [6, 3],
-      labelBgBorderRadius: 6,
+      labelBgStyle: {
+        fill: "#020617",
+        fillOpacity: 1,
+        stroke: "#475569",
+        strokeWidth: 1,
+      },
+      labelBgPadding: [14, 7],
+      labelBgBorderRadius: 999,
+      labelShowBg: true,
     };
   });
 
@@ -391,6 +446,15 @@ function sanitizeEntities(rawEntities: unknown): Entity[] {
             ? entity.id
             : crypto.randomUUID(),
         type: safeType,
+        name: typeof entity?.name === "string" ? entity.name : "",
+        shortDescription:
+          typeof entity?.shortDescription === "string"
+            ? entity.shortDescription
+            : "",
+        notes: typeof entity?.notes === "string" ? entity.notes : "",
+        tags: Array.isArray(entity?.tags)
+         ? entity.tags.filter((tag: unknown): tag is string => typeof tag === "string")
+          : [],
         metadata:
           entity && typeof entity === "object"
             ? remapMetadataForType(entity.metadata, safeType)
@@ -481,7 +545,9 @@ export default function App() {
   const entities = useMemo(() => sanitizeEntities(rawEntities), [rawEntities]);
   const relations = useMemo(() => sanitizeRelations(rawRelations), [rawRelations]);
 
-  const [selectedId, setSelectedId] = useState<string>(() => initialEntities[0]?.id ?? "");
+  const [selectedId, setSelectedId] = useState<string>(
+    () => initialEntities[0]?.id ?? ""
+  );
   const [search, setSearch] = useState("");
   const [archiveTypeFilter, setArchiveTypeFilter] = useState<"all" | EntityType>("all");
   const [tagFilter, setTagFilter] = useState("");
@@ -514,8 +580,8 @@ export default function App() {
 
   useEffect(() => {
     const exists = entities.some((entity) => entity.id === selectedId);
-    if (!exists && entities.length > 0) {
-      setSelectedId(entities[0].id);
+    if (!exists) {
+      setSelectedId(entities[0]?.id ?? "");
     }
   }, [entities, selectedId]);
 
@@ -538,9 +604,9 @@ export default function App() {
   useEffect(() => {
     function handleWindowClick(event: MouseEvent) {
       if (!floatingMenuRef.current) return;
-     const target = event.target;
-if (!(target instanceof globalThis.Node)) return;
-if (floatingMenuRef.current?.contains(target)) return;
+      const target = event.target;
+      if (!(target instanceof globalThis.Node)) return;
+      if (floatingMenuRef.current.contains(target)) return;
       setIsFloatingCreateOpen(false);
     }
 
@@ -592,17 +658,19 @@ if (floatingMenuRef.current?.contains(target)) return;
   }, [entities, search, archiveTypeFilter, tagFilter, sortMode]);
 
   const selectedEntity =
-    entities.find((entity) => entity.id === selectedId) ?? entities[0];
+    entities.find((entity) => entity.id === selectedId) ?? null;
 
-  const availableRelationTargets = entities.filter(
-    (entity) => entity.id !== selectedEntity?.id
-  );
+  const availableRelationTargets = selectedEntity
+    ? entities.filter((entity) => entity.id !== selectedEntity.id)
+    : [];
 
-  const selectedEntityRelations = relations.filter(
-    (relation) =>
-      relation.fromEntityId === selectedEntity?.id ||
-      relation.toEntityId === selectedEntity?.id
-  );
+  const selectedEntityRelations = selectedEntity
+    ? relations.filter(
+        (relation) =>
+          relation.fromEntityId === selectedEntity.id ||
+          relation.toEntityId === selectedEntity.id
+      )
+    : [];
 
   const timelineEvents = useMemo<TimelineEvent[]>(() => {
     return entities
@@ -660,10 +728,9 @@ if (floatingMenuRef.current?.contains(target)) return;
     const nextType = normalizedPatch.type ?? selectedEntity.type;
 
     if (typeof normalizedPatch.name === "string") {
-      normalizedPatch.name = normalizeEntityName(normalizedPatch.name);
+      const trimmedName = normalizeEntityName(normalizedPatch.name);
 
-      if (!normalizedPatch.name) {
-        alert("Il nome dell'entità non può essere vuoto.");
+      if (!trimmedName) {
         return;
       }
 
@@ -671,23 +738,12 @@ if (floatingMenuRef.current?.contains(target)) return;
         hasDuplicateEntityName(
           entities,
           nextType,
-          normalizedPatch.name,
+          trimmedName,
           selectedEntity.id
         )
       ) {
-        alert("Esiste già un'entità dello stesso tipo con questo nome.");
         return;
       }
-    }
-
-    if (typeof normalizedPatch.shortDescription === "string") {
-      normalizedPatch.shortDescription = normalizeText(
-        normalizedPatch.shortDescription
-      );
-    }
-
-    if (typeof normalizedPatch.notes === "string") {
-      normalizedPatch.notes = normalizedPatch.notes.trim();
     }
 
     if (Array.isArray(normalizedPatch.tags)) {
@@ -850,7 +906,7 @@ if (floatingMenuRef.current?.contains(target)) return;
 
     window.addEventListener("keydown", handleKeyboardShortcuts);
     return () => window.removeEventListener("keydown", handleKeyboardShortcuts);
-  }, [isCreatingEntity, isFloatingCreateOpen, selectedEntity, deleteSelectedEntity]);
+  }, [isCreatingEntity, isFloatingCreateOpen, selectedEntity]);
 
   function resetAllData() {
     const confirmed = window.confirm(
@@ -973,7 +1029,7 @@ if (floatingMenuRef.current?.contains(target)) return;
                 : crypto.randomUUID(),
             name: normalizeEntityName(entity.name),
             shortDescription: normalizeText(entity.shortDescription),
-            notes: entity.notes.trim(),
+            notes: entity.notes,
             tags: entity.tags
               .map(normalizeTag)
               .filter(Boolean)
@@ -1032,10 +1088,7 @@ if (floatingMenuRef.current?.contains(target)) return;
         setRawEntities(sanitizedEntities);
         setRawRelations(sanitizedRelations);
 
-        if (sanitizedEntities.length > 0) {
-          setSelectedId(sanitizedEntities[0].id);
-        }
-
+        setSelectedId(sanitizedEntities[0]?.id ?? "");
         setSearch("");
         setArchiveTypeFilter("all");
         setTagFilter("");
@@ -1249,20 +1302,16 @@ if (floatingMenuRef.current?.contains(target)) return;
     graphViewTag,
   ]);
 
-  if (!selectedEntity) {
-    return (
-      <div style={pageStyle}>
-        <h1>Worldbuilder</h1>
-        <p>Nessuna entità disponibile.</p>
-        <button onClick={() => handleOpenCreateEntity()} style={primaryButtonLargeStyle}>
-          + Nuova entità
-        </button>
-      </div>
-    );
-  }
+  const showEmptyState = !selectedEntity;
 
   return (
-    <div style={pageStyle}>
+    <div
+      style={{
+        ...pageStyle,
+        background:
+          "radial-gradient(circle at top, rgba(59,130,246,0.08), transparent 24%), linear-gradient(180deg, #0b1020 0%, #111827 100%)",
+      }}
+    >
       <div style={pageContainerStyle}>
         <input
           ref={fileInputRef}
@@ -1285,324 +1334,407 @@ if (floatingMenuRef.current?.contains(target)) return;
           <div>
             <h1 style={{ margin: 0, fontSize: "32px" }}>Worldbuilder</h1>
             <p style={{ margin: "6px 0 0 0", color: "#9ca3af" }}>
-              Prototipo locale per worldbuilding visuale e rapido, pensato per D&D.
+              Prototipo locale per worldbuilding visuale e rapido, pensato per D&amp;D.
             </p>
           </div>
 
           <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
             <button
+              type="button"
               onClick={() => handleOpenCreateEntity()}
               style={primaryButtonLargeStyle}
             >
               + Nuova entità
             </button>
 
-            <button onClick={exportData} style={successButtonLargeStyle}>
+            <button type="button" onClick={exportData} style={successButtonLargeStyle}>
               Export JSON
             </button>
 
             <button
+              type="button"
               onClick={() => fileInputRef.current?.click()}
               style={purpleButtonLargeStyle}
             >
               Import JSON
             </button>
 
-            <button onClick={resetAllData} style={secondaryButtonLargeStyle}>
+            <button type="button" onClick={resetAllData} style={secondaryButtonLargeStyle}>
               Reset dati
             </button>
           </div>
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "280px minmax(0, 1fr) 420px",
-            gap: "16px",
-            alignItems: "start",
-          }}
-        >
-          <Sidebar
-            entities={filteredEntities}
-            allTags={allTags}
-            selectedEntityId={selectedId}
-            searchTerm={search}
-            setSearchTerm={setSearch}
-            typeFilter={archiveTypeFilter === "all" ? "tutti" : archiveTypeFilter}
-            setTypeFilter={(value) =>
-              setArchiveTypeFilter(value === "tutti" ? "all" : value)
-            }
-            tagFilter={tagFilter}
-            setTagFilter={setTagFilter}
-            sortMode={sortMode}
-            setSortMode={setSortMode}
-            onSelectEntity={(id) => {
-              setSelectedId(id);
-              setNewTag("");
+        {showEmptyState ? (
+          <div
+            style={{
+              ...panelStyle,
+              maxWidth: 720,
+              margin: "0 auto",
+              border: "1px solid #263244",
+              boxShadow: "0 16px 40px rgba(0,0,0,0.18)",
+              display: "grid",
+              gap: 16,
             }}
-            isCreatingEntity={isCreatingEntity}
-            createEntityType={createEntityType}
-            onOpenCreateEntity={handleOpenCreateEntity}
-            onCancelCreateEntity={handleCancelCreateEntity}
-            onCreateEntity={handleCreateEntity}
-            searchInputRef={searchInputRef}
-          />
-
-          <div style={{ display: "grid", gap: "16px", minWidth: 0 }}>
-            <EntityEditor
-              selectedEntity={selectedEntity}
-              newTag={newTag}
-              onUpdateEntity={updateSelectedEntity}
-              onNewTagChange={setNewTag}
-              onAddTag={addTag}
-              onRemoveTag={removeTag}
-              onDuplicateEntity={duplicateSelectedEntity}
-              onDeleteEntity={deleteSelectedEntity}
-            />
-
-            <div style={panelStyle}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: "12px",
-                  flexWrap: "wrap",
-                  marginBottom: "12px",
-                }}
-              >
-                <div>
-                  <h2 style={{ margin: 0 }}>Timeline eventi</h2>
-                  <div
-                    style={{
-                      fontSize: "13px",
-                      color: "#9ca3af",
-                      marginTop: "4px",
-                    }}
-                  >
-                    Lista cronologica degli eventi. Click su un evento per aprire la scheda.
-                  </div>
-                </div>
-
-                <select
-                  value={timelinePeriodFilter}
-                  onChange={(e) => setTimelinePeriodFilter(e.target.value)}
-                  style={{
-                    minWidth: "220px",
-                    padding: "10px 12px",
-                    borderRadius: "10px",
-                    border: "1px solid #374151",
-                    backgroundColor: "#111827",
-                    color: "#f3f4f6",
-                  }}
-                >
-                  <option value="all">Tutte le epoche</option>
-                  {timelinePeriods.map((period) => (
-                    <option key={period} value={period}>
-                      {period}
-                    </option>
-                  ))}
-                </select>
+          >
+            <div>
+              <h2 style={{ marginBottom: 8 }}>Nessuna entità disponibile</h2>
+              <div style={{ color: "#9ca3af", fontSize: 14, lineHeight: 1.6 }}>
+                Il progetto è vuoto. Crea la prima entità per iniziare.
               </div>
-
-              {filteredTimelineEvents.length === 0 ? (
-                <div
-                  style={{
-                    backgroundColor: "#111827",
-                    border: "1px solid #374151",
-                    borderRadius: "14px",
-                    padding: "14px",
-                    color: "#9ca3af",
-                    fontSize: "14px",
-                  }}
-                >
-                  Nessun evento trovato per il filtro selezionato.
-                </div>
-              ) : (
-                <div style={{ display: "grid", gap: "10px" }}>
-                  {filteredTimelineEvents.map((event) => {
-                    const isSelected = selectedEntity.id === event.entity.id;
-
-                    return (
-                      <button
-                        key={event.entity.id}
-                        onClick={() => setSelectedId(event.entity.id)}
-                        style={timelineItemStyle(isSelected)}
-                      >
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                            gap: "10px",
-                            flexWrap: "wrap",
-                            marginBottom: "8px",
-                          }}
-                        >
-                          <div style={{ fontWeight: 700, fontSize: "15px" }}>
-                            {event.entity.name}
-                          </div>
-
-                          {event.stato ? (
-                            <span
-                              style={timelineBadgeStyle(
-                                getTimelineBadgeColor(event.stato)
-                              )}
-                            >
-                              {event.stato}
-                            </span>
-                          ) : null}
-                        </div>
-
-                        <div
-                          style={{
-                            display: "flex",
-                            flexWrap: "wrap",
-                            gap: "8px",
-                            marginBottom: "8px",
-                          }}
-                        >
-                          {event.anno ? (
-                            <span style={metaPillStyle()}>Anno: {event.anno}</span>
-                          ) : null}
-
-                          {event.epoca ? (
-                            <span style={metaPillStyle()}>Epoca: {event.epoca}</span>
-                          ) : null}
-
-                          {event.ordineCronologico ? (
-                            <span style={metaPillStyle()}>
-                              Ordine: {event.ordineCronologico}
-                            </span>
-                          ) : null}
-                        </div>
-
-                        {event.entity.shortDescription ? (
-                          <div style={{ fontSize: "13px", color: "#d1d5db" }}>
-                            {event.entity.shortDescription}
-                          </div>
-                        ) : null}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
             </div>
 
-            <GraphPanel
-              graphViewMode={graphViewMode}
-              graphFilter={graphFilter}
-              graphTypeFilters={graphTypeFilters}
-              graphViewType={graphViewType}
-              graphViewTag={graphViewTag}
-              allTags={allTags}
-              graphData={graphData}
-              onGraphViewModeChange={setGraphViewMode}
-              onGraphFilterChange={setGraphFilter}
-              onToggleGraphTypeFilter={toggleGraphTypeFilter}
-              onGraphViewTypeChange={setGraphViewType}
-              onGraphViewTagChange={setGraphViewTag}
-              onNodeClick={setSelectedId}
-              getEntityById={getEntityById}
-            />
+            {isCreatingEntity ? (
+              <NewEntityForm
+                entities={entities}
+                initialType={createEntityType}
+                onCancel={handleCancelCreateEntity}
+                onCreate={handleCreateEntity}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleOpenCreateEntity()}
+                style={{
+                  ...primaryButtonLargeStyle,
+                  width: "fit-content",
+                }}
+              >
+                + Nuova entità
+              </button>
+            )}
           </div>
-
-          <RelationsPanel
-            entities={entities}
-            relations={relations}
-            selectedEntity={selectedEntity}
-            availableRelationTargets={availableRelationTargets}
-            selectedEntityRelations={selectedEntityRelations}
-            relationType={relationType}
-            relationInverseType={relationInverseType}
-            relationTargetId={relationTargetId}
-            relationPresets={RELATION_PRESETS}
-            onRelationTypeChange={handleRelationTypeChange}
-            onRelationInverseTypeChange={setRelationInverseType}
-            onRelationTargetIdChange={setRelationTargetId}
-            onAddRelation={addRelation}
-            onDeleteRelation={deleteRelation}
-            getEntityById={getEntityById}
-          />
-        </div>
-      </div>
-
-      <div
-        ref={floatingMenuRef}
-        style={{
-          position: "fixed",
-          right: "24px",
-          bottom: "24px",
-          zIndex: 60,
-          display: "grid",
-          gap: "10px",
-          justifyItems: "end",
-        }}
-      >
-        {isFloatingCreateOpen ? (
+        ) : (
           <div
             style={{
               display: "grid",
-              gap: "8px",
-              backgroundColor: "#111827",
-              border: "1px solid #374151",
-              borderRadius: "16px",
-              padding: "12px",
-              boxShadow: "0 20px 40px rgba(0,0,0,0.32)",
-              minWidth: "220px",
+              gridTemplateColumns: "280px minmax(0, 1fr) 420px",
+              gap: "16px",
+              alignItems: "start",
             }}
           >
-            {QUICK_CREATE_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                onClick={() => handleOpenCreateEntity(option.value)}
+            <Sidebar
+              entities={filteredEntities}
+              allTags={allTags}
+              selectedEntityId={selectedId}
+              searchTerm={search}
+              setSearchTerm={setSearch}
+              typeFilter={archiveTypeFilter === "all" ? "tutti" : archiveTypeFilter}
+              setTypeFilter={(value) =>
+                setArchiveTypeFilter(value === "tutti" ? "all" : value)
+              }
+              tagFilter={tagFilter}
+              setTagFilter={setTagFilter}
+              sortMode={sortMode}
+              setSortMode={setSortMode}
+              onSelectEntity={(id) => {
+                setSelectedId(id);
+                setNewTag("");
+              }}
+              isCreatingEntity={isCreatingEntity}
+              createEntityType={createEntityType}
+              onOpenCreateEntity={handleOpenCreateEntity}
+              onCancelCreateEntity={handleCancelCreateEntity}
+              onCreateEntity={handleCreateEntity}
+              searchInputRef={searchInputRef}
+            />
+
+            <div style={{ display: "grid", gap: "16px", minWidth: 0 }}>
+              <EntityEditor
+                selectedEntity={selectedEntity}
+                newTag={newTag}
+                onUpdateEntity={updateSelectedEntity}
+                onNewTagChange={setNewTag}
+                onAddTag={addTag}
+                onRemoveTag={removeTag}
+                onDuplicateEntity={duplicateSelectedEntity}
+                onDeleteEntity={deleteSelectedEntity}
+              />
+
+              <div
                 style={{
-                  ...ghostButtonStyle,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: "12px",
-                  width: "100%",
-                  borderRadius: "12px",
-                  padding: "12px 14px",
+                  ...panelStyle,
+                  border: "1px solid #263244",
+                  boxShadow: "0 16px 40px rgba(0,0,0,0.18)",
                 }}
               >
-                <span>{option.label}</span>
-                <span
+                <div
                   style={{
-                    width: "10px",
-                    height: "10px",
-                    borderRadius: "999px",
-                    backgroundColor: getTypeColor(option.value),
-                    flexShrink: 0,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "12px",
+                    flexWrap: "wrap",
+                    marginBottom: "12px",
                   }}
-                />
-              </button>
-            ))}
-          </div>
-        ) : null}
+                >
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      <uiIcons.timeline size={18} />
+                      <h2 style={{ margin: 0 }}>Timeline eventi</h2>
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "13px",
+                        color: "#9ca3af",
+                        marginTop: "4px",
+                      }}
+                    >
+                      Lista cronologica degli eventi. Click su un evento per aprire la scheda.
+                    </div>
+                  </div>
 
-        <button
-          type="button"
-          aria-label="Apri creazione rapida"
-          onClick={() => setIsFloatingCreateOpen((current) => !current)}
+                  <select
+                    value={timelinePeriodFilter}
+                    onChange={(e) => setTimelinePeriodFilter(e.target.value)}
+                    style={{
+                      minWidth: "220px",
+                      padding: "10px 12px",
+                      borderRadius: "10px",
+                      border: "1px solid #374151",
+                      backgroundColor: "#111827",
+                      color: "#f3f4f6",
+                    }}
+                  >
+                    <option value="all">Tutte le epoche</option>
+                    {timelinePeriods.map((period) => (
+                      <option key={period} value={period}>
+                        {period}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {filteredTimelineEvents.length === 0 ? (
+                  <div
+                    style={{
+                      backgroundColor: "#111827",
+                      border: "1px solid #374151",
+                      borderRadius: "14px",
+                      padding: "14px",
+                      color: "#9ca3af",
+                      fontSize: "14px",
+                    }}
+                  >
+                    Nessun evento trovato per il filtro selezionato.
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gap: "10px" }}>
+                    {filteredTimelineEvents.map((event) => {
+                      const isSelected = selectedEntity.id === event.entity.id;
+                      const EventIcon = getEntityTypeIcon(event.entity.type);
+
+                      return (
+                        <button
+                          key={event.entity.id}
+                          type="button"
+                          onClick={() => setSelectedId(event.entity.id)}
+                          style={timelineItemStyle(isSelected)}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              gap: "10px",
+                              flexWrap: "wrap",
+                              marginBottom: "8px",
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "10px",
+                                minWidth: 0,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: 28,
+                                  height: 28,
+                                  borderRadius: "10px",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  background: "rgba(59,130,246,0.14)",
+                                  border: "1px solid rgba(59,130,246,0.24)",
+                                  flexShrink: 0,
+                                }}
+                              >
+                                <EventIcon size={15} />
+                              </div>
+
+                              <div style={{ fontWeight: 700, fontSize: "15px", minWidth: 0 }}>
+                                {event.entity.name}
+                              </div>
+                            </div>
+
+                            {event.stato ? (
+                              <span
+                                style={timelineBadgeStyle(
+                                  getTimelineBadgeColor(event.stato)
+                                )}
+                              >
+                                {event.stato}
+                              </span>
+                            ) : null}
+                          </div>
+
+                          <div
+                            style={{
+                              display: "flex",
+                              flexWrap: "wrap",
+                              gap: "8px",
+                              marginBottom: "8px",
+                            }}
+                          >
+                            {event.anno ? (
+                              <span style={metaPillStyle()}>Anno: {event.anno}</span>
+                            ) : null}
+
+                            {event.epoca ? (
+                              <span style={metaPillStyle()}>Epoca: {event.epoca}</span>
+                            ) : null}
+
+                            {event.ordineCronologico ? (
+                              <span style={metaPillStyle()}>
+                                Ordine: {event.ordineCronologico}
+                              </span>
+                            ) : null}
+                          </div>
+
+                          {event.entity.shortDescription ? (
+                            <div style={{ fontSize: "13px", color: "#d1d5db" }}>
+                              {event.entity.shortDescription}
+                            </div>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <GraphPanel
+                graphViewMode={graphViewMode}
+                graphFilter={graphFilter}
+                graphTypeFilters={graphTypeFilters}
+                graphViewType={graphViewType}
+                graphViewTag={graphViewTag}
+                allTags={allTags}
+                selectedEntityId={selectedEntity.id}
+                graphData={graphData}
+                onGraphViewModeChange={setGraphViewMode}
+                onGraphFilterChange={setGraphFilter}
+                onToggleGraphTypeFilter={toggleGraphTypeFilter}
+                onGraphViewTypeChange={setGraphViewType}
+                onGraphViewTagChange={setGraphViewTag}
+                onNodeClick={setSelectedId}
+                getEntityById={getEntityById}
+              />
+            </div>
+
+            <RelationsPanel
+              entities={entities}
+              relations={relations}
+              selectedEntity={selectedEntity}
+              availableRelationTargets={availableRelationTargets}
+              selectedEntityRelations={selectedEntityRelations}
+              relationType={relationType}
+              relationInverseType={relationInverseType}
+              relationTargetId={relationTargetId}
+              relationPresets={RELATION_PRESETS}
+              onRelationTypeChange={handleRelationTypeChange}
+              onRelationInverseTypeChange={setRelationInverseType}
+              onRelationTargetIdChange={setRelationTargetId}
+              onAddRelation={addRelation}
+              onDeleteRelation={deleteRelation}
+              getEntityById={getEntityById}
+            />
+          </div>
+        )}
+      </div>
+
+      {!showEmptyState ? (
+        <div
+          ref={floatingMenuRef}
           style={{
-            width: "62px",
-            height: "62px",
-            borderRadius: "999px",
-            border: "none",
-            backgroundColor: "#2563eb",
-            color: "#ffffff",
-            fontSize: "34px",
-            lineHeight: 1,
-            cursor: "pointer",
-            boxShadow: "0 18px 38px rgba(37,99,235,0.35)",
-            fontWeight: 500,
+            position: "fixed",
+            right: "24px",
+            bottom: "24px",
+            zIndex: 60,
+            display: "grid",
+            gap: "10px",
+            justifyItems: "end",
           }}
         >
-          {isFloatingCreateOpen ? "×" : "+"}
-        </button>
-      </div>
+          {isFloatingCreateOpen ? (
+            <div
+              style={{
+                display: "grid",
+                gap: "8px",
+                backgroundColor: "#111827",
+                border: "1px solid #374151",
+                borderRadius: "16px",
+                padding: "12px",
+                boxShadow: "0 20px 40px rgba(0,0,0,0.32)",
+                minWidth: "220px",
+              }}
+            >
+              {QUICK_CREATE_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => handleOpenCreateEntity(option.value)}
+                  style={{
+                    ...ghostButtonStyle,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "12px",
+                    width: "100%",
+                    borderRadius: "12px",
+                    padding: "12px 14px",
+                  }}
+                >
+                  <span>{option.label}</span>
+                  <span
+                    style={{
+                      width: "10px",
+                      height: "10px",
+                      borderRadius: "999px",
+                      backgroundColor: getTypeColor(option.value),
+                      flexShrink: 0,
+                    }}
+                  />
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          <button
+            type="button"
+            aria-label="Apri creazione rapida"
+            onClick={() => setIsFloatingCreateOpen((current) => !current)}
+            style={{
+              width: "62px",
+              height: "62px",
+              borderRadius: "999px",
+              border: "none",
+              backgroundColor: "#2563eb",
+              color: "#ffffff",
+              fontSize: "34px",
+              lineHeight: 1,
+              cursor: "pointer",
+              boxShadow: "0 18px 38px rgba(37,99,235,0.35)",
+              fontWeight: 500,
+            }}
+          >
+            {isFloatingCreateOpen ? "×" : "+"}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -255,3 +255,20 @@ export function getTypeColor(type: EntityType): string {
       return "#374151";
   }
 }
+
+export function getTypeIconGlyph(type: EntityType): string {
+  switch (type) {
+    case "luogo":
+      return "▲";
+    case "personaggio":
+      return "●";
+    case "fazione":
+      return "◆";
+    case "oggetto":
+      return "■";
+    case "evento":
+      return "✦";
+    default:
+      return "•";
+  }
+}

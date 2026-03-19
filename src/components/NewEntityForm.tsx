@@ -1,3 +1,4 @@
+import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ENTITY_TYPE_OPTIONS, UI_TEXT } from "../config";
 import { inputStyle, primaryButtonStyle, selectStyle } from "../styles";
@@ -25,9 +26,10 @@ const formStyle: React.CSSProperties = {
   flexDirection: "column",
   gap: 10,
   padding: 12,
-  border: "1px solid #2b2b2b",
-  borderRadius: 10,
-  background: "#161616",
+  border: "1px solid rgba(148,163,184,0.14)",
+  borderRadius: 12,
+  background:
+    "linear-gradient(180deg, rgba(19,29,46,0.96) 0%, rgba(15,23,38,0.96) 100%)",
   marginTop: 12,
 };
 
@@ -40,13 +42,15 @@ const fieldWrapStyle: React.CSSProperties = {
 const labelStyle: React.CSSProperties = {
   fontSize: 13,
   color: "#cfcfcf",
+  fontWeight: 700,
 };
 
 const cancelButtonStyle: React.CSSProperties = {
   padding: "10px 12px",
-  borderRadius: 8,
-  border: "1px solid #333",
-  background: "#1c1c1c",
+  borderRadius: 12,
+  border: "1px solid rgba(148,163,184,0.14)",
+  background:
+    "linear-gradient(180deg, rgba(19,29,46,0.96) 0%, rgba(15,23,38,0.96) 100%)",
   color: "white",
   cursor: "pointer",
 };
@@ -78,7 +82,11 @@ export default function NewEntityForm({
   }, [initialType]);
 
   useEffect(() => {
-    nameInputRef.current?.focus();
+    const frame = window.requestAnimationFrame(() => {
+      nameInputRef.current?.focus();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
   }, [initialType]);
 
   useEffect(() => {
@@ -161,6 +169,7 @@ export default function NewEntityForm({
         <label style={labelStyle}>Nome</label>
         <input
           ref={nameInputRef}
+          type="text"
           value={name}
           onChange={(event) => {
             setName(event.target.value);
@@ -177,14 +186,18 @@ export default function NewEntityForm({
       <div style={fieldWrapStyle}>
         <label style={labelStyle}>Descrizione breve</label>
         <input
+          type="text"
           value={shortDescription}
-          onChange={(event) => setShortDescription(event.target.value)}
+          onChange={(event) => {
+            setShortDescription(event.target.value);
+            setError("");
+          }}
           placeholder={UI_TEXT.newEntityDescriptionPlaceholder}
           style={inputStyle}
         />
       </div>
 
-      {error && <div style={errorStyle}>{error}</div>}
+      {error ? <div style={errorStyle}>{error}</div> : null}
 
       <div
         style={{
@@ -202,7 +215,7 @@ export default function NewEntityForm({
           disabled={!normalizedName || duplicateName}
           style={{
             ...primaryButtonStyle,
-            background: !normalizedName || duplicateName ? "#444" : "#2d6cdf",
+            opacity: !normalizedName || duplicateName ? 0.6 : 1,
             cursor:
               !normalizedName || duplicateName ? "not-allowed" : "pointer",
           }}

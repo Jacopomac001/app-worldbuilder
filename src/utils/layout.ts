@@ -1,5 +1,5 @@
 import dagre from "@dagrejs/dagre";
-import type { Edge, Node } from "@xyflow/react";
+import { Position, type Edge, type Node } from "@xyflow/react";
 import { NODE_HEIGHT, NODE_WIDTH } from "../data";
 
 export function getLayoutedElements(
@@ -39,8 +39,8 @@ export function getLayoutedElements(
         x: position.x - NODE_WIDTH / 2,
         y: position.y - NODE_HEIGHT / 2,
       },
-      sourcePosition: direction === "LR" ? "right" : "bottom",
-      targetPosition: direction === "LR" ? "left" : "top",
+      sourcePosition: direction === "LR" ? Position.Right : Position.Bottom,
+      targetPosition: direction === "LR" ? Position.Left : Position.Top,
     };
   });
 
