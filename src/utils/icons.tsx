@@ -5,6 +5,7 @@ import {
   Castle,
   ChevronDown,
   ChevronUp,
+  Circle,
   Clock3,
   Copy,
   FileText,
@@ -22,6 +23,10 @@ import {
 } from "lucide-react";
 import type { EntityType } from "../types";
 
+/* -------------------------------------------------------------------------- */
+/*                             ICONE PER TIPO ENTITÀ                          */
+/* -------------------------------------------------------------------------- */
+
 export const entityTypeIcons: Record<EntityType, LucideIcon> = {
   luogo: MapPinned,
   personaggio: Users,
@@ -29,6 +34,10 @@ export const entityTypeIcons: Record<EntityType, LucideIcon> = {
   oggetto: Gem,
   evento: CalendarRange,
 };
+
+/* -------------------------------------------------------------------------- */
+/*                                ICONE UI                                    */
+/* -------------------------------------------------------------------------- */
 
 export const uiIcons = {
   archive: Boxes,
@@ -45,7 +54,15 @@ export const uiIcons = {
   sectionClosed: ChevronDown,
   settlement: Castle,
   conflict: Swords,
-};
+
+  // ⭐ AGGIUNTA IMPORTANTE
+  // Usata nella GraphView per i nodi
+  node: Circle,
+} as const;
+
+/* -------------------------------------------------------------------------- */
+/*                             FUNZIONI UTILI                                 */
+/* -------------------------------------------------------------------------- */
 
 export function getEntityTypeIcon(type: EntityType): LucideIcon {
   return entityTypeIcons[type];

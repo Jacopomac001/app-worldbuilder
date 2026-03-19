@@ -1,3 +1,4 @@
+import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   applyNodeChanges,
@@ -79,8 +80,10 @@ type GraphPanelProps = {
   onToggleGraphTypeFilter: (type: EntityType) => void;
   onGraphViewTypeChange: (value: "all" | EntityType) => void;
   onGraphViewTagChange: (value: string) => void;
-  onNodeClick: (id: string) => void;
+  onNodeClick: (entityId: string) => void;
   getEntityById: (id: string) => Entity | undefined;
+  compactControlsOnly?: boolean;
+  graphOnly?: boolean;
 };
 
 const GRAPH_LAYOUT_MODE_STORAGE_KEY = "worldbuilder_graph_layout_mode";
@@ -211,7 +214,7 @@ function WorldNode({ data }: NodeProps<Node<GraphNodeData>>) {
         transition: "opacity 160ms ease",
       }}
     >
-          <Handle
+      <Handle
         type="target"
         position={Position.Left}
         id="left-target"
@@ -263,6 +266,7 @@ function WorldNode({ data }: NodeProps<Node<GraphNodeData>>) {
           pointerEvents: "none",
         }}
       />
+
       {isHovered ? (
         <div
           style={{
@@ -351,10 +355,9 @@ function WorldNode({ data }: NodeProps<Node<GraphNodeData>>) {
           position: "relative",
           borderRadius: "18px",
           padding: "14px",
-          background:
-            isSelected
-              ? "linear-gradient(180deg, rgba(17,24,39,1) 0%, rgba(8,15,28,1) 100%)"
-              : "linear-gradient(180deg, rgba(17,24,39,0.95) 0%, rgba(11,18,32,0.95) 100%)",
+          background: isSelected
+            ? "linear-gradient(180deg, rgba(17,24,39,1) 0%, rgba(8,15,28,1) 100%)"
+            : "linear-gradient(180deg, rgba(17,24,39,0.95) 0%, rgba(11,18,32,0.95) 100%)",
           border: isSelected
             ? `1px solid ${accent}`
             : isConnectedToSelection
@@ -532,6 +535,21 @@ const edgeTypes = {
   relationEdge: RelationEdge,
 };
 
+const controlsSectionStyle: React.CSSProperties = {
+  display: "grid",
+  gap: "10px",
+};
+
+const graphCanvasStyle: React.CSSProperties = {
+  height: "680px",
+  background:
+    "radial-gradient(circle at top, rgba(37,99,235,0.10), transparent 28%), linear-gradient(180deg, #08111f 0%, #0b1220 100%)",
+  borderRadius: "18px",
+  border: "1px solid #334155",
+  overflow: "hidden",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
+};
+
 export default function GraphPanel({
   graphViewMode,
   graphFilter,
@@ -548,6 +566,8 @@ export default function GraphPanel({
   onGraphViewTagChange,
   onNodeClick,
   getEntityById,
+  compactControlsOnly = false,
+  graphOnly = false,
 }: GraphPanelProps) {
   const [graphLayoutMode, setGraphLayoutMode] = useState<GraphLayoutMode>(() =>
     readStoredLayoutMode()
@@ -566,7 +586,9 @@ export default function GraphPanel({
   useEffect(() => {
     try {
       window.localStorage.setItem(GRAPH_LAYOUT_MODE_STORAGE_KEY, graphLayoutMode);
-    } catch {}
+    } catch {
+      // ignore localStorage errors
+    }
   }, [graphLayoutMode]);
 
   useEffect(() => {
@@ -575,7 +597,9 @@ export default function GraphPanel({
         GRAPH_NODE_POSITIONS_STORAGE_KEY,
         JSON.stringify(manualNodePositions)
       );
-    } catch {}
+    } catch {
+      // ignore localStorage errors
+    }
   }, [manualNodePositions]);
 
   const visibleGraphData = useMemo(() => {
@@ -586,6 +610,7 @@ export default function GraphPanel({
         ? graphData.nodes.map((node) => {
             const saved = manualNodePositions[String(node.id)];
             if (!saved) return node;
+
             return {
               ...node,
               position: saved,
@@ -650,9 +675,11 @@ export default function GraphPanel({
     }
 
     const relatedIds = new Set<string>(matchedIds);
+
     styledEdges.forEach((edge) => {
       const source = String(edge.source);
       const target = String(edge.target);
+
       if (matchedIds.has(source) || matchedIds.has(target)) {
         relatedIds.add(source);
         relatedIds.add(target);
@@ -703,242 +730,284 @@ export default function GraphPanel({
 
   function handleResetFreeLayout() {
     const visibleIds = new Set(visibleGraphData.nodes.map((node) => String(node.id)));
+
     setManualNodePositions((current) => {
       const next = { ...current };
+
       visibleIds.forEach((id) => {
         delete next[id];
       });
+
       return next;
     });
   }
 
-  return (
-    <div
-      style={{
+  const containerStyle: React.CSSProperties = graphOnly
+    ? {
+        height: "100%",
+        minHeight: 0,
+        display: "grid",
+      }
+    : {
         ...panelStyle,
         border: "1px solid #263244",
         boxShadow: "0 18px 46px rgba(0,0,0,0.22)",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          gap: "12px",
-          marginBottom: "14px",
-          flexWrap: "wrap",
-        }}
-      >
-        <div>
-          <h2 style={{ marginTop: 0, marginBottom: "6px" }}>Grafo relazioni</h2>
-          <div style={{ fontSize: "13px", color: "#9ca3af" }}>
-            Le relazioni sono renderizzate con un edge custom, non più con la label standard.
-          </div>
-        </div>
+      };
 
-        <div
-          style={{
-            fontSize: "12px",
-            color: "#cbd5e1",
-            padding: "8px 10px",
-            borderRadius: "999px",
-            background: "#0b1220",
-            border: "1px solid #334155",
-          }}
-        >
-          Nodi: {visibleGraphData.nodes.length} · Relazioni: {visibleGraphData.edges.length}
-        </div>
-      </div>
+  const graphHeightStyle: React.CSSProperties = compactControlsOnly
+    ? {}
+    : graphOnly
+    ? {
+        ...graphCanvasStyle,
+        height: "100%",
+        minHeight: "560px",
+        borderRadius: 0,
+        border: "none",
+        boxShadow: "none",
+      }
+    : graphCanvasStyle;
 
-      <div style={{ display: "grid", gap: "10px", marginBottom: "14px" }}>
-        <div style={{ fontSize: "13px", color: "#9ca3af" }}>Modalità vista</div>
-
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          {GRAPH_VIEW_MODE_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              onClick={() => onGraphViewModeChange(option.value)}
-              style={modeButtonStyle(graphViewMode === option.value)}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-
-        {showFocusedDirectionControls ? (
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            {GRAPH_FOCUSED_FILTER_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                onClick={() => onGraphFilterChange(option.value)}
-                style={modeButtonStyle(graphFilter === option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
-
-        {showTypeSelector ? (
-          <select
-            value={graphViewType}
-            onChange={(e) =>
-              onGraphViewTypeChange(e.target.value as "all" | EntityType)
-            }
-            style={selectStyle}
+  return (
+    <div style={containerStyle}>
+      {!graphOnly ? (
+        <>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              gap: "12px",
+              marginBottom: "14px",
+              flexWrap: "wrap",
+            }}
           >
-            {GRAPH_VIEW_TYPE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        ) : null}
+            <div>
+              <h2 style={{ marginTop: 0, marginBottom: "6px" }}>
+                Grafo relazioni
+              </h2>
+              <div style={{ fontSize: "13px", color: "#9ca3af" }}>
+                Esplora il mondo per connessioni, tipo, tag e direzione delle
+                relazioni.
+              </div>
+            </div>
 
-        {showTagSelector ? (
-          <select
-            value={graphViewTag}
-            onChange={(e) => onGraphViewTagChange(e.target.value)}
-            style={selectStyle}
-          >
-            <option value="">{UI_TEXT.graphTagPlaceholder}</option>
-            {allTags.map((tag) => (
-              <option key={tag} value={tag}>
-                {tag}
-              </option>
-            ))}
-          </select>
-        ) : null}
-
-        {showTypeToggles ? (
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            {GRAPH_TYPE_TOGGLE_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                onClick={() => onToggleGraphTypeFilter(option.value)}
-                style={typeToggleStyle(
-                  graphTypeFilters[option.value],
-                  option.value
-                )}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
-
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
-          <button
-            onClick={() => setGraphLayoutMode("auto")}
-            style={modeButtonStyle(graphLayoutMode === "auto")}
-          >
-            Layout automatico
-          </button>
-
-          <button
-            onClick={() => setGraphLayoutMode("free")}
-            style={modeButtonStyle(graphLayoutMode === "free")}
-          >
-            Layout libero
-          </button>
-
-          {graphLayoutMode === "free" ? (
-            <button
-              onClick={handleResetFreeLayout}
+            <div
               style={{
-                ...modeButtonStyle(false),
-                background: "#3f3f46",
+                fontSize: "12px",
+                color: "#cbd5e1",
+                padding: "8px 10px",
+                borderRadius: "999px",
+                background: "#0b1220",
+                border: "1px solid #334155",
               }}
             >
-              Reset posizioni visibili
-            </button>
-          ) : null}
-        </div>
+              Nodi: {visibleGraphData.nodes.length} · Relazioni:{" "}
+              {visibleGraphData.edges.length}
+            </div>
+          </div>
 
-        <input
-          type="text"
-          value={graphSearch}
-          onChange={(e) => setGraphSearch(e.target.value)}
-          placeholder="Cerca nel grafo..."
+          <div style={controlsSectionStyle}>
+            <div style={{ fontSize: "13px", color: "#9ca3af" }}>
+              Modalità vista
+            </div>
+
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+              {GRAPH_VIEW_MODE_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => onGraphViewModeChange(option.value)}
+                  style={modeButtonStyle(graphViewMode === option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+
+            {showFocusedDirectionControls ? (
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                {GRAPH_FOCUSED_FILTER_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => onGraphFilterChange(option.value)}
+                    style={modeButtonStyle(graphFilter === option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            {showTypeSelector ? (
+              <select
+                value={graphViewType}
+                onChange={(e) =>
+                  onGraphViewTypeChange(e.target.value as "all" | EntityType)
+                }
+                style={selectStyle}
+              >
+                {GRAPH_VIEW_TYPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+
+            {showTagSelector ? (
+              <select
+                value={graphViewTag}
+                onChange={(e) => onGraphViewTagChange(e.target.value)}
+                style={selectStyle}
+              >
+                <option value="">{UI_TEXT.graphTagPlaceholder}</option>
+                {allTags.map((tag) => (
+                  <option key={tag} value={tag}>
+                    {tag}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+
+            {showTypeToggles ? (
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                {GRAPH_TYPE_TOGGLE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => onToggleGraphTypeFilter(option.value)}
+                    style={typeToggleStyle(
+                      graphTypeFilters[option.value],
+                      option.value
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            <div
+              style={{
+                display: "flex",
+                gap: "8px",
+                flexWrap: "wrap",
+                alignItems: "center",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setGraphLayoutMode("auto")}
+                style={modeButtonStyle(graphLayoutMode === "auto")}
+              >
+                Layout automatico
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setGraphLayoutMode("free")}
+                style={modeButtonStyle(graphLayoutMode === "free")}
+              >
+                Layout libero
+              </button>
+
+              {graphLayoutMode === "free" ? (
+                <button
+                  type="button"
+                  onClick={handleResetFreeLayout}
+                  style={{
+                    ...modeButtonStyle(false),
+                    background: "#3f3f46",
+                  }}
+                >
+                  Reset posizioni visibili
+                </button>
+              ) : null}
+            </div>
+
+            <input
+              type="text"
+              value={graphSearch}
+              onChange={(e) => setGraphSearch(e.target.value)}
+              placeholder="Cerca nel grafo..."
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                borderRadius: "10px",
+                border: "1px solid #374151",
+                backgroundColor: "#0b1220",
+                color: "#f3f4f6",
+                boxSizing: "border-box",
+              }}
+            />
+
+            <div style={{ fontSize: "12px", color: "#9ca3af", lineHeight: 1.5 }}>
+              {GRAPH_VIEW_MODE_DESCRIPTIONS[graphViewMode]}
+            </div>
+          </div>
+        </>
+      ) : null}
+
+      {!compactControlsOnly ? (
+        <div
           style={{
-            width: "100%",
-            padding: "10px 12px",
-            borderRadius: "10px",
-            border: "1px solid #374151",
-            backgroundColor: "#0b1220",
-            color: "#f3f4f6",
-            boxSizing: "border-box",
-          }}
-        />
-
-        <div style={{ fontSize: "12px", color: "#9ca3af", lineHeight: 1.5 }}>
-          {GRAPH_VIEW_MODE_DESCRIPTIONS[graphViewMode]}
-        </div>
-      </div>
-
-      <div
-        style={{
-          height: "680px",
-          background:
-            "radial-gradient(circle at top, rgba(37,99,235,0.10), transparent 28%), linear-gradient(180deg, #08111f 0%, #0b1220 100%)",
-          borderRadius: "18px",
-          border: "1px solid #334155",
-          overflow: "hidden",
-          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
-        }}
-      >
-        <ReactFlow
-          nodes={renderNodes}
-          edges={visibleGraphData.edges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          fitView={graphLayoutMode === "auto"}
-          nodesDraggable={graphLayoutMode === "free"}
-          nodesConnectable={false}
-          elementsSelectable
-          minZoom={0.2}
-          maxZoom={1.8}
-          onNodesChange={handleNodesChange}
-          onNodeClick={(_, node) => onNodeClick(String(node.id))}
-          onNodeDragStop={handleNodeDragStop}
-          defaultEdgeOptions={{
-            type: "relationEdge",
-            animated: false,
+            ...graphHeightStyle,
+            marginTop: graphOnly ? 0 : 16,
           }}
         >
-          <GraphAutoFocus
-            selectedEntityId={selectedEntityId}
+          <ReactFlow
             nodes={renderNodes}
-            layoutMode={graphLayoutMode}
-          />
-
-          <MiniMap
-            pannable
-            zoomable
-            maskColor="rgba(2, 6, 23, 0.72)"
-            style={{
-              background: "rgba(15, 23, 42, 0.9)",
-              border: "1px solid #334155",
-              borderRadius: "12px",
+            edges={visibleGraphData.edges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            fitView={graphLayoutMode === "auto"}
+            nodesDraggable={graphLayoutMode === "free"}
+            nodesConnectable={false}
+            elementsSelectable
+            minZoom={0.2}
+            maxZoom={1.8}
+            onNodesChange={handleNodesChange}
+            onNodeClick={(_, node) => onNodeClick(String(node.id))}
+            onNodeDragStop={handleNodeDragStop}
+            defaultEdgeOptions={{
+              type: "relationEdge",
+              animated: false,
             }}
-            nodeColor={(node) => {
-              const entity = getEntityById(String(node.id));
-              return entity ? getTypeColor(entity.type) : "#334155";
-            }}
-          />
+          >
+            <GraphAutoFocus
+              selectedEntityId={selectedEntityId}
+              nodes={renderNodes}
+              layoutMode={graphLayoutMode}
+            />
 
-          <Controls
-            style={{
-              borderRadius: "12px",
-              overflow: "hidden",
-              boxShadow: "0 10px 24px rgba(0,0,0,0.25)",
-            }}
-          />
+            <MiniMap
+              pannable
+              zoomable
+              maskColor="rgba(2, 6, 23, 0.72)"
+              style={{
+                background: "rgba(15, 23, 42, 0.9)",
+                border: "1px solid #334155",
+                borderRadius: "12px",
+              }}
+              nodeColor={(node) => {
+                const entity = getEntityById(String(node.id));
+                return entity ? getTypeColor(entity.type) : "#334155";
+              }}
+            />
 
-          <Background gap={20} size={1} color="rgba(148,163,184,0.16)" />
-        </ReactFlow>
-      </div>
+            <Controls
+              style={{
+                borderRadius: "12px",
+                overflow: "hidden",
+                boxShadow: "0 10px 24px rgba(0,0,0,0.25)",
+              }}
+            />
+
+            <Background gap={20} size={1} color="rgba(148,163,184,0.16)" />
+          </ReactFlow>
+        </div>
+      ) : null}
     </div>
   );
 }

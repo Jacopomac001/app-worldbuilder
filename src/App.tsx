@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { MarkerType, type Edge, type Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { getEntityTypeIcon, uiIcons } from "./utils/icons";
-
+import WorldDashboard from "./components/WorldDashboard";
+import GraphView from "./components/GraphView";
 import Sidebar from "./components/Sidebar";
 import EntityEditor from "./components/EntityEditor";
 import GraphPanel from "./components/GraphPanel";
@@ -548,6 +549,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string>(
     () => initialEntities[0]?.id ?? ""
   );
+const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard");
   const [search, setSearch] = useState("");
   const [archiveTypeFilter, setArchiveTypeFilter] = useState<"all" | EntityType>("all");
   const [tagFilter, setTagFilter] = useState("");
@@ -1304,7 +1306,69 @@ export default function App() {
 
   const showEmptyState = !selectedEntity;
 
-  return (
+  return view === "dashboard" ? (
+  <div
+    style={{
+      ...pageStyle,
+      background:
+        "radial-gradient(circle at top, rgba(59,130,246,0.08), transparent 24%), linear-gradient(180deg, #0b1020 0%, #111827 100%)",
+    }}
+  >
+    <div style={pageContainerStyle}>
+      <WorldDashboard
+        entities={entities}
+        relations={relations}
+        onOpenEntity={(id) => {
+          setSelectedId(id);
+          setView("workspace");
+        }}
+        onEnterWorkspace={() => setView("workspace")}
+        onCreateEntity={() => {
+          setCreateEntityType("luogo");
+          setIsCreatingEntity(true);
+          setView("workspace");
+        }}
+      />
+    </div>
+  </div>
+) : view === "graph" ? (
+  <div
+    style={{
+      ...pageStyle,
+      background:
+        "radial-gradient(circle at top, rgba(59,130,246,0.08), transparent 24%), linear-gradient(180deg, #0b1020 0%, #111827 100%)",
+    }}
+  >
+    <div style={pageContainerStyle}>
+      <GraphView
+        entities={entities}
+        relations={relations}
+        selectedEntity={selectedEntity}
+        graphViewMode={graphViewMode}
+        graphFilter={graphFilter}
+        graphTypeFilters={graphTypeFilters}
+        graphViewType={graphViewType}
+        graphViewTag={graphViewTag}
+        allTags={allTags}
+        graphData={graphData}
+        onGraphViewModeChange={setGraphViewMode}
+        onGraphFilterChange={setGraphFilter}
+        onToggleGraphTypeFilter={toggleGraphTypeFilter}
+        onGraphViewTypeChange={setGraphViewType}
+        onGraphViewTagChange={setGraphViewTag}
+        onNodeClick={setSelectedId}
+        getEntityById={getEntityById}
+        onBackToWorkspace={() => setView("workspace")}
+        onGoToDashboard={() => setView("dashboard")}
+        onOpenEntityInEditor={() => {
+          if (selectedEntity) {
+            setView("workspace");
+          }
+        }}
+      />
+    </div>
+  </div>
+) : (
     <div
       style={{
         ...pageStyle,
@@ -1341,9 +1405,30 @@ export default function App() {
           <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
             <button
               type="button"
-              onClick={() => handleOpenCreateEntity()}
-              style={primaryButtonLargeStyle}
-            >
+              onClick={() => setView("dashboard")}
+    style={secondaryButtonLargeStyle}
+
+  >
+    Dashboard
+  </button>
+ <button
+  type="button"
+  onClick={() => {
+    if (!selectedId && entities.length > 0) {
+      setSelectedId(entities[0].id);
+    }
+    setView("graph");
+  }}
+  style={secondaryButtonLargeStyle}
+>
+  Apri grafo
+</button>
+
+  <button
+    type="button"
+    onClick={() => handleOpenCreateEntity()}
+    style={primaryButtonLargeStyle}
+  >
               + Nuova entità
             </button>
 
@@ -1616,42 +1701,26 @@ export default function App() {
                 )}
               </div>
 
-              <GraphPanel
-                graphViewMode={graphViewMode}
-                graphFilter={graphFilter}
-                graphTypeFilters={graphTypeFilters}
-                graphViewType={graphViewType}
-                graphViewTag={graphViewTag}
-                allTags={allTags}
-                selectedEntityId={selectedEntity.id}
-                graphData={graphData}
-                onGraphViewModeChange={setGraphViewMode}
-                onGraphFilterChange={setGraphFilter}
-                onToggleGraphTypeFilter={toggleGraphTypeFilter}
-                onGraphViewTypeChange={setGraphViewType}
-                onGraphViewTagChange={setGraphViewTag}
-                onNodeClick={setSelectedId}
-                getEntityById={getEntityById}
-              />
-            </div>
+              
 
             <RelationsPanel
-              entities={entities}
-              relations={relations}
-              selectedEntity={selectedEntity}
-              availableRelationTargets={availableRelationTargets}
-              selectedEntityRelations={selectedEntityRelations}
-              relationType={relationType}
-              relationInverseType={relationInverseType}
-              relationTargetId={relationTargetId}
-              relationPresets={RELATION_PRESETS}
-              onRelationTypeChange={handleRelationTypeChange}
-              onRelationInverseTypeChange={setRelationInverseType}
-              onRelationTargetIdChange={setRelationTargetId}
-              onAddRelation={addRelation}
-              onDeleteRelation={deleteRelation}
-              getEntityById={getEntityById}
-            />
+  entities={entities}
+  relations={relations}
+  selectedEntity={selectedEntity}
+  availableRelationTargets={availableRelationTargets}
+  selectedEntityRelations={selectedEntityRelations}
+  relationType={relationType}
+  relationInverseType={relationInverseType}
+  relationTargetId={relationTargetId}
+  relationPresets={RELATION_PRESETS}
+  onRelationTypeChange={handleRelationTypeChange}
+  onRelationInverseTypeChange={setRelationInverseType}
+  onRelationTargetIdChange={setRelationTargetId}
+  onAddRelation={addRelation}
+  onDeleteRelation={deleteRelation}
+  getEntityById={getEntityById}
+/>
+</div>
           </div>
         )}
       </div>
