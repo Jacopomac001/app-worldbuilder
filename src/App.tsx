@@ -6,7 +6,6 @@ import WorldDashboard from "./components/WorldDashboard";
 import GraphView from "./components/GraphView";
 import Sidebar from "./components/Sidebar";
 import EntityEditor from "./components/EntityEditor";
-import GraphPanel from "./components/GraphPanel";
 import RelationsPanel from "./components/RelationsPanel";
 import NewEntityForm from "./components/NewEntityForm";
 
@@ -1339,34 +1338,32 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
         "radial-gradient(circle at top, rgba(59,130,246,0.08), transparent 24%), linear-gradient(180deg, #0b1020 0%, #111827 100%)",
     }}
   >
-    <div style={pageContainerStyle}>
-      <GraphView
-        entities={entities}
-        relations={relations}
-        selectedEntity={selectedEntity}
-        graphViewMode={graphViewMode}
-        graphFilter={graphFilter}
-        graphTypeFilters={graphTypeFilters}
-        graphViewType={graphViewType}
-        graphViewTag={graphViewTag}
-        allTags={allTags}
-        graphData={graphData}
-        onGraphViewModeChange={setGraphViewMode}
-        onGraphFilterChange={setGraphFilter}
-        onToggleGraphTypeFilter={toggleGraphTypeFilter}
-        onGraphViewTypeChange={setGraphViewType}
-        onGraphViewTagChange={setGraphViewTag}
-        onNodeClick={setSelectedId}
-        getEntityById={getEntityById}
-        onBackToWorkspace={() => setView("workspace")}
-        onGoToDashboard={() => setView("dashboard")}
-        onOpenEntityInEditor={() => {
-          if (selectedEntity) {
-            setView("workspace");
-          }
-        }}
-      />
-    </div>
+   <div style={pageContainerStyle}>
+  <GraphView
+    selectedEntity={selectedEntity}
+    graphViewMode={graphViewMode}
+    graphFilter={graphFilter}
+    graphTypeFilters={graphTypeFilters}
+    graphViewType={graphViewType}
+    graphViewTag={graphViewTag}
+    allTags={allTags}
+    graphData={graphData}
+    onGraphViewModeChange={setGraphViewMode}
+    onGraphFilterChange={setGraphFilter}
+    onToggleGraphTypeFilter={toggleGraphTypeFilter}
+    onGraphViewTypeChange={setGraphViewType}
+    onGraphViewTagChange={setGraphViewTag}
+    onNodeClick={setSelectedId}
+    getEntityById={getEntityById}
+    onBackToWorkspace={() => setView("workspace")}
+    onGoToDashboard={() => setView("dashboard")}
+    onOpenEntityInEditor={() => {
+      if (selectedEntity) {
+        setView("workspace");
+      }
+    }}
+  />
+</div>
   </div>
 ) : (
     <div

@@ -1,5 +1,5 @@
 import type React from "react";
-import type { Entity, EntityType, Relation } from "../types";
+import type { Entity, EntityType } from "../types";
 import type { FocusedGraphFilter, GraphViewMode } from "./GraphPanel";
 import GraphPanel from "./GraphPanel";
 import { panelStyle, secondaryButtonLargeStyle } from "../styles";
@@ -7,8 +7,6 @@ import { getEntityTypeLabel } from "../utils/entity";
 import { uiIcons } from "../utils/icons";
 
 type GraphViewProps = {
-  entities: Entity[];
-  relations: Relation[];
   selectedEntity: Entity | null;
   graphViewMode: GraphViewMode;
   graphFilter: FocusedGraphFilter;
@@ -32,7 +30,7 @@ type GraphViewProps = {
   onOpenEntityInEditor: () => void;
 };
 
-const NodeIcon = uiIcons.node; // ✔ icona valida
+const NodeIcon = uiIcons.node;
 
 const pageStyle: React.CSSProperties = {
   height: "100vh",
@@ -44,7 +42,6 @@ const topBarStyle: React.CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
   alignItems: "center",
-  gap: 12,
   padding: "16px 20px",
 };
 
@@ -92,8 +89,6 @@ const tagStyle: React.CSSProperties = {
 };
 
 export default function GraphView({
-  entities,
-  relations,
   selectedEntity,
   graphViewMode,
   graphFilter,
@@ -117,20 +112,17 @@ export default function GraphView({
     <div style={pageStyle}>
       {/* HEADER */}
       <div style={topBarStyle}>
-        <div>
-          <h1 style={{ margin: 0 }}>Vista grafo</h1>
-          <div style={{ color: "#9ca3af", fontSize: 14 }}>
-            Esplorazione visuale del mondo
-          </div>
-        </div>
+        <h1>Vista grafo</h1>
 
         <div style={{ display: "flex", gap: 10 }}>
           <button onClick={onGoToDashboard} style={secondaryButtonLargeStyle}>
             Dashboard
           </button>
+
           <button onClick={onBackToWorkspace} style={secondaryButtonLargeStyle}>
             Workspace
           </button>
+
           <button
             onClick={onOpenEntityInEditor}
             style={secondaryButtonLargeStyle}
@@ -207,7 +199,7 @@ export default function GraphView({
                   {getEntityTypeLabel(selectedEntity.type)}
                 </div>
 
-                <div style={{ marginTop: 8, color: "#dbe3f0" }}>
+                <div style={{ marginTop: 8 }}>
                   {selectedEntity.shortDescription ||
                     "Nessuna descrizione."}
                 </div>
