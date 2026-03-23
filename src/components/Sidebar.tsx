@@ -1,32 +1,27 @@
 import type React from "react";
-import { useEffect, useMemo, useRef } from "react";
-import {
-  ENTITY_TYPE_FILTER_OPTIONS,
-  QUICK_CREATE_OPTIONS,
-  SORT_MODE_OPTIONS,
-  UI_TEXT,
-} from "../config";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { SORT_MODE_OPTIONS, UI_TEXT } from "../config";
 import {
   archiveItemStyle,
   quickCreateButtonStyle,
   selectedBadgeStyle,
   tagChipStyle,
 } from "../styles";
-import type { Entity, EntityType } from "../types";
-import { getEntityTypeLabel, getTypeColor } from "../utils/entity";
-import { getEntityTypeIcon, uiIcons } from "../utils/icons";
+import type { Entity, EntityType, EntityTypeDefinition } from "../types";
 import NewEntityForm from "./NewEntityForm";
+import { uiIcons } from "../utils/icons";
 
 type SortMode = "name-asc" | "type" | "lastModified-desc";
 
 type SidebarProps = {
+  entityTypes: EntityTypeDefinition[];
   entities: Entity[];
   allTags: string[];
   selectedEntityId: string | null;
   searchTerm: string;
   setSearchTerm: (value: string) => void;
-  typeFilter: EntityType | "tutti";
-  setTypeFilter: (value: EntityType | "tutti") => void;
+  typeFilter: EntityType | "all";
+  setTypeFilter: (value: EntityType | "all") => void;
   tagFilter: string;
   setTagFilter: (value: string) => void;
   sortMode: SortMode;
@@ -41,6 +36,7 @@ type SidebarProps = {
     name: string;
     shortDescription: string;
   }) => boolean;
+  onCreateEntityType: (data: { label: string; color: string }) => boolean;
   searchInputRef: React.RefObject<HTMLInputElement | null>;
 };
 
@@ -86,7 +82,30 @@ const primaryActionStyle: React.CSSProperties = {
   boxShadow: "0 12px 24px rgba(37,99,235,0.22)",
 };
 
+const typeFormWrapStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 8,
+  padding: 12,
+  marginBottom: 16,
+  borderRadius: 12,
+  border: "1px solid rgba(148,163,184,0.14)",
+  background:
+    "linear-gradient(180deg, rgba(19,29,46,0.96) 0%, rgba(15,23,38,0.96) 100%)",
+};
+
+function getTypeLabel(typeId: string, entityTypes: EntityTypeDefinition[]) {
+  return (
+    entityTypes.find((item) => item.id === typeId)?.label ??
+    typeId.charAt(0).toUpperCase() + typeId.slice(1)
+  );
+}
+
+function getTypeColor(typeId: string, entityTypes: EntityTypeDefinition[]) {
+  return entityTypes.find((item) => item.id === typeId)?.color ?? "#64748b";
+}
+
 export default function Sidebar({
+  entityTypes,
   entities,
   allTags,
   selectedEntityId,
@@ -104,8 +123,13 @@ export default function Sidebar({
   onOpenCreateEntity,
   onCancelCreateEntity,
   onCreateEntity,
+  onCreateEntityType,
   searchInputRef,
 }: SidebarProps) {
+  const [isTypeCreatorOpen, setIsTypeCreatorOpen] = useState(false);
+  const [newTypeLabel, setNewTypeLabel] = useState("");
+  const [newTypeColor, setNewTypeColor] = useState("#64748b");
+
   const itemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const previousSelectedIdRef = useRef<string | null>(null);
 
@@ -168,6 +192,19 @@ export default function Sidebar({
     return () => window.removeEventListener("keydown", handleKeyNavigation);
   }, [entities, onSelectEntity, searchInputRef, selectedIndex]);
 
+  function handleCreateType() {
+    const created = onCreateEntityType({
+      label: newTypeLabel,
+      color: newTypeColor,
+    });
+
+    if (!created) return;
+
+    setNewTypeLabel("");
+    setNewTypeColor("#64748b");
+    setIsTypeCreatorOpen(false);
+  }
+
   return (
     <aside style={asideStyle}>
       <div
@@ -205,6 +242,97 @@ export default function Sidebar({
         Nuova entità
       </button>
 
+      <button
+        type="button"
+        onClick={() => setIsTypeCreatorOpen((current) => !current)}
+        style={{
+          ...baseControlStyle,
+          width: "100%",
+          cursor: "pointer",
+          marginBottom: 12,
+          fontWeight: 700,
+        }}
+      >
+        {isTypeCreatorOpen ? "Chiudi creazione tipo" : "+ Nuovo tipo entità"}
+      </button>
+
+      {isTypeCreatorOpen ? (
+        <div style={typeFormWrapStyle}>
+          <div
+            style={{
+              fontSize: 12,
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+              color: "#9ca3af",
+              fontWeight: 800,
+            }}
+          >
+            Crea tipo custom
+          </div>
+
+          <input
+            type="text"
+            value={newTypeLabel}
+            onChange={(e) => setNewTypeLabel(e.target.value)}
+            placeholder="Es. Religione"
+            style={baseControlStyle}
+          />
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 70px",
+              gap: 8,
+              alignItems: "center",
+            }}
+          >
+            <div
+              style={{
+                ...baseControlStyle,
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+              }}
+            >
+              <span
+                style={{
+                  width: 14,
+                  height: 14,
+                  borderRadius: 999,
+                  backgroundColor: newTypeColor,
+                  border: "1px solid rgba(255,255,255,0.18)",
+                  flexShrink: 0,
+                }}
+              />
+              <span style={{ color: "#cbd5e1", fontSize: 13 }}>Colore tipo</span>
+            </div>
+
+            <input
+              type="color"
+              value={newTypeColor}
+              onChange={(e) => setNewTypeColor(e.target.value)}
+              style={{
+                width: "100%",
+                height: 42,
+                borderRadius: 12,
+                border: "1px solid rgba(148,163,184,0.14)",
+                background: "transparent",
+                padding: 4,
+                cursor: "pointer",
+              }}
+            />
+          </div>
+
+          <button
+            type="button"
+            onClick={handleCreateType}
+            style={primaryActionStyle}
+          >
+            Salva tipo
+          </button>
+        </div>
+      ) : null}
+
       <div
         style={{
           display: "grid",
@@ -213,32 +341,37 @@ export default function Sidebar({
           marginBottom: 16,
         }}
       >
-        {QUICK_CREATE_OPTIONS.map((option) => {
-          const Icon = getEntityTypeIcon(option.value);
-
-          return (
-            <button
-              key={option.value}
-              type="button"
-              onClick={() => onOpenCreateEntity(option.value)}
+        {entityTypes.slice(0, 6).map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            onClick={() => onOpenCreateEntity(option.id)}
+            style={{
+              ...quickCreateButtonStyle(),
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+            }}
+          >
+            <span
               style={{
-                ...quickCreateButtonStyle(),
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 8,
+                width: 10,
+                height: 10,
+                borderRadius: 999,
+                backgroundColor: option.color,
+                flexShrink: 0,
               }}
-            >
-              <Icon size={14} />
-              {option.label}
-            </button>
-          );
-        })}
+            />
+            {option.label}
+          </button>
+        ))}
       </div>
 
       {isCreatingEntity ? (
         <div style={{ marginBottom: 16 }}>
           <NewEntityForm
+            entityTypes={entityTypes}
             entities={entities}
             initialType={createEntityType}
             onCancel={onCancelCreateEntity}
@@ -276,11 +409,12 @@ export default function Sidebar({
 
         <select
           value={typeFilter}
-          onChange={(e) => setTypeFilter(e.target.value as EntityType | "tutti")}
+          onChange={(e) => setTypeFilter(e.target.value as EntityType | "all")}
           style={baseControlStyle}
         >
-          {ENTITY_TYPE_FILTER_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
+          <option value="all">Tutti i tipi</option>
+          {entityTypes.map((option) => (
+            <option key={option.id} value={option.id}>
               {option.label}
             </option>
           ))}
@@ -331,8 +465,7 @@ export default function Sidebar({
         <div style={{ display: "grid", gap: 10 }}>
           {entities.map((entity) => {
             const isSelected = entity.id === selectedEntityId;
-            const accent = getTypeColor(entity.type);
-            const EntityIcon = getEntityTypeIcon(entity.type);
+            const accent = getTypeColor(entity.type, entityTypes);
 
             return (
               <button
@@ -359,7 +492,15 @@ export default function Sidebar({
                       marginTop: 2,
                     }}
                   >
-                    <EntityIcon size={15} color={accent} />
+                    <span
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: 999,
+                        backgroundColor: accent,
+                        display: "block",
+                      }}
+                    />
                   </div>
 
                   <div style={{ minWidth: 0, flex: 1 }}>
@@ -395,7 +536,7 @@ export default function Sidebar({
                         textAlign: "left",
                       }}
                     >
-                      {getEntityTypeLabel(entity.type)}
+                      {getTypeLabel(entity.type, entityTypes)}
                     </div>
 
                     {entity.shortDescription ? (

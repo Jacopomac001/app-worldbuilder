@@ -1,5 +1,5 @@
 import type React from "react";
-import type { Entity, EntityType } from "../types";
+import type { Entity, EntityType, EntityTypeDefinition } from "../types";
 import type { FocusedGraphFilter, GraphViewMode } from "./GraphPanel";
 import GraphPanel from "./GraphPanel";
 import { panelStyle, secondaryButtonLargeStyle } from "../styles";
@@ -7,6 +7,7 @@ import { getEntityTypeLabel } from "../utils/entity";
 import { uiIcons } from "../utils/icons";
 
 type GraphViewProps = {
+  entityTypes: EntityTypeDefinition[];
   selectedEntity: Entity | null;
   graphViewMode: GraphViewMode;
   graphFilter: FocusedGraphFilter;
@@ -89,6 +90,7 @@ const tagStyle: React.CSSProperties = {
 };
 
 export default function GraphView({
+  entityTypes,
   selectedEntity,
   graphViewMode,
   graphFilter,
@@ -110,7 +112,6 @@ export default function GraphView({
 }: GraphViewProps) {
   return (
     <div style={pageStyle}>
-      {/* HEADER */}
       <div style={topBarStyle}>
         <h1>Vista grafo</h1>
 
@@ -133,11 +134,10 @@ export default function GraphView({
         </div>
       </div>
 
-      {/* CONTENT */}
       <div style={contentStyle}>
-        {/* FILTRI */}
         <aside style={sidePanelStyle}>
           <GraphPanel
+            entityTypes={entityTypes}
             graphViewMode={graphViewMode}
             graphFilter={graphFilter}
             graphTypeFilters={graphTypeFilters}
@@ -157,10 +157,10 @@ export default function GraphView({
           />
         </aside>
 
-        {/* GRAFO */}
         <section style={graphContainerStyle}>
           <div style={graphInnerStyle}>
             <GraphPanel
+              entityTypes={entityTypes}
               graphViewMode={graphViewMode}
               graphFilter={graphFilter}
               graphTypeFilters={graphTypeFilters}
@@ -181,7 +181,6 @@ export default function GraphView({
           </div>
         </section>
 
-        {/* DETTAGLI */}
         <aside style={sidePanelStyle}>
           {!selectedEntity ? (
             <div style={infoCardStyle}>
@@ -196,12 +195,11 @@ export default function GraphView({
                 </div>
 
                 <div style={{ marginTop: 8 }}>
-                  {getEntityTypeLabel(selectedEntity.type)}
+                  {getEntityTypeLabel(selectedEntity.type, entityTypes)}
                 </div>
 
                 <div style={{ marginTop: 8 }}>
-                  {selectedEntity.shortDescription ||
-                    "Nessuna descrizione."}
+                  {selectedEntity.shortDescription || "Nessuna descrizione."}
                 </div>
               </div>
 

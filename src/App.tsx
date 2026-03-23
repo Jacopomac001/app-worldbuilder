@@ -15,10 +15,7 @@ import type {
 } from "./components/GraphPanel";
 
 import {
-  DEFAULT_GRAPH_TYPE_FILTERS,
-  DEFAULT_GRAPH_VIEW_TYPE,
   DEFAULT_RELATION_PRESET_INDEX,
-  QUICK_CREATE_OPTIONS,
   TIMELINE_STATUS_COLORS,
   UI_TEXT,
 } from "./config";
@@ -39,15 +36,14 @@ import {
 
 import {
   RELATION_PRESETS,
-  createEntity,
   getDefaultMetadata,
-  getEntityTypeLabel,
+  getMetadataFieldDefinition,
   getSuggestedInverseRelationType,
-  getTypeColor,
-  getTypeIconGlyph,
   hasDuplicateEntityName,
+  isSameMetadataRelationOrigin,
   normalizeEntityName,
   normalizeMetadata,
+  normalizeMetadataValue,
   normalizeOptionalRelationType,
   normalizeRelationType,
   normalizeTag,
@@ -64,7 +60,14 @@ import {
   NODE_WIDTH,
 } from "./data";
 import { useLocalStorageState } from "./hooks/useLocalStorageState";
-import type { Entity, EntityType, Relation, WorldData } from "./types";
+import type {
+  Entity,
+  EntityType,
+  EntityTypeDefinition,
+  MetadataFieldDefinition,
+  Relation,
+  WorldData,
+} from "./types";
 
 type SortMode = "name-asc" | "type" | "lastModified-desc";
 
@@ -90,6 +93,212 @@ type GraphNodeData = {
   isDimmed?: boolean;
   level?: 0 | 1 | 2;
 };
+
+const ENTITY_TYPES_STORAGE_KEY = "worldbuilder_entity_types";
+
+const DEFAULT_ENTITY_TYPES: EntityTypeDefinition[] = [
+  {
+    id: "luogo",
+    label: "Luogo",
+    color: "#3b82f6",
+    builtIn: true,
+    fields: [
+      {
+        key: "regione",
+        label: "Regione",
+        kind: "text",
+        placeholder: "Es. Costa orientale",
+      },
+      {
+        key: "clima",
+        label: "Clima",
+        kind: "text",
+        placeholder: "Es. Tropicale umido",
+      },
+      {
+        key: "popolazione",
+        label: "Popolazione",
+        kind: "text",
+        placeholder: "Es. 12.000 abitanti",
+      },
+      {
+        key: "pericolo",
+        label: "Livello di pericolo",
+        kind: "text",
+        placeholder: "Es. Alto",
+      },
+    ],
+  },
+  {
+    id: "personaggio",
+    label: "Personaggio",
+    color: "#f59e0b",
+    builtIn: true,
+    fields: [
+      {
+        key: "ruolo",
+        label: "Ruolo",
+        kind: "text",
+        placeholder: "Es. Esploratore",
+      },
+      {
+        key: "fazione",
+        label: "Fazione",
+        kind: "entity-reference",
+        placeholder: "Es. Guardia d’Ambra",
+        allowedEntityTypes: ["fazione"],
+        relationType: "membro di",
+        relationInverseType: "include",
+        autoCreateTarget: false,
+      },
+      {
+        key: "religione",
+        label: "Religione",
+        kind: "entity-reference",
+        placeholder: "Es. Culto del Sole",
+        allowedEntityTypes: ["religione"],
+        relationType: "segue",
+        relationInverseType: "ha come fedele",
+        autoCreateTarget: true,
+        autoCreateTargetType: "religione",
+      },
+      {
+        key: "abitaIn",
+        label: "Abita in",
+        kind: "entity-reference",
+        placeholder: "Es. Porto Nero",
+        allowedEntityTypes: ["luogo"],
+        relationType: "abita in",
+        relationInverseType: "ospita",
+        autoCreateTarget: false,
+      },
+      {
+        key: "status",
+        label: "Status",
+        kind: "text",
+        placeholder: "Es. Vivo / disperso",
+      },
+    ],
+  },
+  {
+    id: "fazione",
+    label: "Fazione",
+    color: "#ef4444",
+    builtIn: true,
+    fields: [
+      {
+        key: "leader",
+        label: "Leader",
+        kind: "entity-reference",
+        placeholder: "Es. Matriarca Sihra",
+        allowedEntityTypes: ["personaggio"],
+        relationType: "ha come leader",
+        relationInverseType: "guida",
+        autoCreateTarget: false,
+      },
+      {
+        key: "territorio",
+        label: "Territorio",
+        kind: "entity-reference",
+        placeholder: "Es. Paludi del sud",
+        allowedEntityTypes: ["luogo"],
+        relationType: "controlla",
+        relationInverseType: "è controllato da",
+        autoCreateTarget: false,
+      },
+      {
+        key: "ideologia",
+        label: "Ideologia",
+        kind: "text",
+        placeholder: "Es. Espansione rituale",
+      },
+      {
+        key: "risorse",
+        label: "Risorse",
+        kind: "text",
+        placeholder: "Es. Ambra, sale, bestie",
+      },
+    ],
+  },
+  {
+    id: "oggetto",
+    label: "Oggetto",
+    color: "#10b981",
+    builtIn: true,
+    fields: [
+      {
+        key: "origine",
+        label: "Origine",
+        kind: "entity-reference",
+        placeholder: "Es. Tempio Verde",
+        allowedEntityTypes: ["luogo", "fazione", "personaggio"],
+        relationType: "proviene da",
+        relationInverseType: "ha originato",
+        autoCreateTarget: false,
+      },
+      {
+        key: "materiale",
+        label: "Materiale",
+        kind: "text",
+        placeholder: "Es. Ossidiana",
+      },
+      {
+        key: "potere",
+        label: "Potere",
+        kind: "textarea",
+        placeholder: "Es. Visioni profetiche",
+      },
+      {
+        key: "stato",
+        label: "Stato",
+        kind: "text",
+        placeholder: "Es. Integro / spezzato",
+      },
+    ],
+  },
+  {
+    id: "evento",
+    label: "Evento",
+    color: "#8b5cf6",
+    builtIn: true,
+    fields: [
+      {
+        key: "anno",
+        label: "Anno",
+        kind: "text",
+        placeholder: "Es. -1200 oppure 432",
+      },
+      {
+        key: "epoca",
+        label: "Epoca",
+        kind: "text",
+        placeholder: "Es. Prima Era",
+      },
+      {
+        key: "ordineCronologico",
+        label: "Ordine cronologico",
+        kind: "text",
+        placeholder: "Es. 10, 20, 30",
+      },
+      {
+        key: "stato",
+        label: "Stato temporale",
+        kind: "text",
+        placeholder: "Es. antico, recente, in corso",
+      },
+      {
+        key: "luogo",
+        label: "Luogo",
+        kind: "entity-reference",
+        placeholder: "Es. Valle Rossa",
+        allowedEntityTypes: ["luogo"],
+        relationType: "si svolge in",
+        relationInverseType: "è teatro di",
+        autoCreateTarget: false,
+      },
+    ],
+  },
+];
 
 function parseNumberLike(value: string | undefined): number | null {
   if (!value) return null;
@@ -135,12 +344,242 @@ function getTimelineBadgeColor(status: string) {
   return TIMELINE_STATUS_COLORS[status.trim().toLowerCase()] ?? "#374151";
 }
 
+function slugifyEntityTypeId(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function isBuiltInEntityType(type: string) {
+  return DEFAULT_ENTITY_TYPES.some((item) => item.id === type);
+}
+
+function sanitizeEntityTypes(
+  rawEntityTypes: unknown,
+  entities?: Entity[]
+): EntityTypeDefinition[] {
+  const fromStorage = Array.isArray(rawEntityTypes)
+    ? rawEntityTypes
+        .map((item): EntityTypeDefinition | null => {
+          if (!item || typeof item !== "object") return null;
+
+          const rawItem = item as {
+            id?: unknown;
+            label?: unknown;
+            color?: unknown;
+            builtIn?: unknown;
+            fields?: unknown;
+          };
+
+          const id =
+            typeof rawItem.id === "string" ? slugifyEntityTypeId(rawItem.id) : "";
+          const label =
+            typeof rawItem.label === "string" ? rawItem.label.trim() : "";
+          const color =
+            typeof rawItem.color === "string" && rawItem.color.trim()
+              ? rawItem.color.trim()
+              : "#64748b";
+
+          if (!id || !label) return null;
+
+          const fields: MetadataFieldDefinition[] | undefined = Array.isArray(
+            rawItem.fields
+          )
+            ? rawItem.fields
+                .map((field): MetadataFieldDefinition | null => {
+                  if (!field || typeof field !== "object") return null;
+
+                  const rawField = field as {
+                    key?: unknown;
+                    label?: unknown;
+                    kind?: unknown;
+                    placeholder?: unknown;
+                    required?: unknown;
+                    allowedEntityTypes?: unknown;
+                    relationType?: unknown;
+                    relationInverseType?: unknown;
+                    autoCreateTarget?: unknown;
+                    autoCreateTargetType?: unknown;
+                  };
+
+                  const key =
+                    typeof rawField.key === "string" ? rawField.key.trim() : "";
+                  const fieldLabel =
+                    typeof rawField.label === "string" ? rawField.label.trim() : "";
+                  const kind =
+                    rawField.kind === "textarea" ||
+                    rawField.kind === "entity-reference"
+                      ? rawField.kind
+                      : "text";
+
+                  if (!key || !fieldLabel) return null;
+
+                  return {
+                    key,
+                    label: fieldLabel,
+                    kind,
+                    placeholder:
+                      typeof rawField.placeholder === "string"
+                        ? rawField.placeholder
+                        : undefined,
+                    required:
+                      typeof rawField.required === "boolean"
+                        ? rawField.required
+                        : undefined,
+                    allowedEntityTypes: Array.isArray(rawField.allowedEntityTypes)
+                      ? rawField.allowedEntityTypes.filter(
+                          (type): type is string => typeof type === "string"
+                        )
+                      : undefined,
+                    relationType:
+                      typeof rawField.relationType === "string"
+                        ? rawField.relationType
+                        : undefined,
+                    relationInverseType:
+                      typeof rawField.relationInverseType === "string"
+                        ? rawField.relationInverseType
+                        : undefined,
+                    autoCreateTarget:
+                      typeof rawField.autoCreateTarget === "boolean"
+                        ? rawField.autoCreateTarget
+                        : undefined,
+                    autoCreateTargetType:
+                      typeof rawField.autoCreateTargetType === "string"
+                        ? rawField.autoCreateTargetType
+                        : undefined,
+                  };
+                })
+                .filter(
+                  (field): field is MetadataFieldDefinition => field !== null
+                )
+            : undefined;
+
+          return {
+            id,
+            label,
+            color,
+            builtIn:
+              (typeof rawItem.builtIn === "boolean" && rawItem.builtIn) ||
+              isBuiltInEntityType(id),
+            fields,
+          };
+        })
+        .filter((item): item is EntityTypeDefinition => item !== null)
+    : [];
+
+  const map = new Map<string, EntityTypeDefinition>();
+
+  DEFAULT_ENTITY_TYPES.forEach((item) => {
+    map.set(item.id, item);
+  });
+
+  fromStorage.forEach((item) => {
+    map.set(item.id, item);
+  });
+
+  if (entities) {
+    entities.forEach((entity) => {
+      const typeId = slugifyEntityTypeId(entity.type);
+      if (!typeId) return;
+
+      if (!map.has(typeId)) {
+        const label =
+          typeId.charAt(0).toUpperCase() + typeId.slice(1).replace(/-/g, " ");
+
+        map.set(typeId, {
+          id: typeId,
+          label,
+          color: "#64748b",
+          builtIn: false,
+          fields: [],
+        });
+      }
+    });
+  }
+
+  return [...map.values()].sort((a, b) => {
+    if (a.builtIn && !b.builtIn) return -1;
+    if (!a.builtIn && b.builtIn) return 1;
+    return a.label.localeCompare(b.label, "it");
+  });
+}
+
+function sanitizeEntityType(value: unknown): string {
+  if (typeof value !== "string") return "luogo";
+  const trimmed = slugifyEntityTypeId(value);
+  return trimmed || "luogo";
+}
+
+function getTypeDefinition(
+  typeId: string,
+  entityTypes: EntityTypeDefinition[]
+): EntityTypeDefinition | undefined {
+  return entityTypes.find((item) => item.id === typeId);
+}
+
+function getTypeLabel(typeId: string, entityTypes: EntityTypeDefinition[]) {
+  return (
+    getTypeDefinition(typeId, entityTypes)?.label ??
+    typeId.charAt(0).toUpperCase() + typeId.slice(1)
+  );
+}
+
+function getTypeColor(typeId: string, entityTypes: EntityTypeDefinition[]) {
+  return getTypeDefinition(typeId, entityTypes)?.color ?? "#64748b";
+}
+
+function getTypeIconGlyph(typeId: string) {
+  if (typeId === "luogo") return "⌂";
+  if (typeId === "personaggio") return "◉";
+  if (typeId === "fazione") return "⚑";
+  if (typeId === "oggetto") return "◆";
+  if (typeId === "evento") return "✦";
+  return "•";
+}
+
+function buildDefaultGraphTypeFilters(entityTypes: EntityTypeDefinition[]) {
+  const next: Record<string, boolean> = {};
+  entityTypes.forEach((item) => {
+    next[item.id] = true;
+  });
+  return next;
+}
+
+function createEntityRecord(
+  data: {
+    type: EntityType;
+    name: string;
+    shortDescription: string;
+  },
+  entityTypes: EntityTypeDefinition[]
+): Entity {
+  const nowIso = new Date().toISOString();
+  const nowNum = Date.now();
+
+  return {
+    id: crypto.randomUUID(),
+    type: data.type,
+    name: data.name,
+    shortDescription: data.shortDescription,
+    notes: "",
+    tags: [],
+    metadata: getDefaultMetadata(data.type, entityTypes),
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    lastModified: nowNum,
+  };
+}
+
 function getActiveGraphEntitiesByFocusedMode(
   entities: Entity[],
   relations: Relation[],
   selectedEntity: Entity,
   graphFilter: FocusedGraphFilter,
-  graphTypeFilters: Record<EntityType, boolean>
+  graphTypeFilters: Record<string, boolean>
 ) {
   const level0Ids = new Set<string>([selectedEntity.id]);
   const level1Ids = new Set<string>();
@@ -282,6 +721,7 @@ function getActiveGraphEntitiesByFocusedMode(
 function buildGraphElements(
   localEntities: Entity[],
   localRelations: Relation[],
+  entityTypes: EntityTypeDefinition[],
   selectedEntityId?: string,
   level0Ids?: Set<string>,
   level1Ids?: Set<string>,
@@ -301,8 +741,8 @@ function buildGraphElements(
   }
 
   const rawNodes: Node<GraphNodeData>[] = localEntities.map((entity) => {
-    const accentColor = getTypeColor(entity.type);
-    const typeLabel = getEntityTypeLabel(entity.type);
+    const accentColor = getTypeColor(entity.type, entityTypes);
+    const typeLabel = getTypeLabel(entity.type, entityTypes);
     const isSelected = selectedEntityId === entity.id;
     const isConnectedToSelection = connectedIds.has(entity.id);
     const inLevel0 = level0Ids?.has(entity.id) ?? false;
@@ -418,24 +858,17 @@ function buildGraphElements(
   return getLayoutedElements(rawNodes, rawEdges, "LR");
 }
 
-function isValidEntityType(value: unknown): value is EntityType {
-  return (
-    value === "luogo" ||
-    value === "personaggio" ||
-    value === "fazione" ||
-    value === "oggetto" ||
-    value === "evento"
-  );
-}
-
 function sanitizeEntities(rawEntities: unknown): Entity[] {
   if (!Array.isArray(rawEntities)) {
-    return initialEntities;
+    return initialEntities.map((entity) => ({
+      ...entity,
+      type: sanitizeEntityType(entity.type),
+    }));
   }
 
   return rawEntities
     .map((entity) => {
-      const safeType = isValidEntityType(entity?.type) ? entity.type : "luogo";
+      const safeType = sanitizeEntityType(entity?.type);
       const nowIso = new Date().toISOString();
       const nowNum = Date.now();
 
@@ -453,12 +886,15 @@ function sanitizeEntities(rawEntities: unknown): Entity[] {
             : "",
         notes: typeof entity?.notes === "string" ? entity.notes : "",
         tags: Array.isArray(entity?.tags)
-         ? entity.tags.filter((tag: unknown): tag is string => typeof tag === "string")
+          ? entity.tags.filter((tag: unknown): tag is string => typeof tag === "string")
           : [],
         metadata:
           entity && typeof entity === "object"
-            ? remapMetadataForType(entity.metadata, safeType)
-            : getDefaultMetadata(safeType),
+            ? normalizeMetadata(entity.metadata)
+            : isBuiltInEntityType(safeType)
+            ? getDefaultMetadata(safeType)
+            : {},
+        image: typeof entity?.image === "string" ? entity.image : undefined,
         createdAt:
           typeof entity?.createdAt === "string" ? entity.createdAt : nowIso,
         updatedAt:
@@ -481,6 +917,14 @@ function sanitizeRelations(rawRelations: unknown): Relation[] {
         typeof relation?.fromEntityId === "string" ? relation.fromEntityId : "";
       const toEntityId =
         typeof relation?.toEntityId === "string" ? relation.toEntityId : "";
+      const source =
+        relation?.source === "manual" || relation?.source === "metadata"
+          ? relation.source
+          : undefined;
+      const sourceFieldKey =
+        typeof relation?.sourceFieldKey === "string" && relation.sourceFieldKey.trim()
+          ? relation.sourceFieldKey.trim()
+          : undefined;
 
       return {
         ...relation,
@@ -492,6 +936,8 @@ function sanitizeRelations(rawRelations: unknown): Relation[] {
         toEntityId,
         type: normalizeRelationType(relation.type),
         inverseType: normalizeOptionalRelationType(relation.inverseType),
+        source,
+        sourceFieldKey,
       } satisfies Relation;
     })
     .filter(
@@ -534,7 +980,10 @@ export default function App() {
 
   const [rawEntities, setRawEntities] = useLocalStorageState<Entity[]>(
     ENTITIES_STORAGE_KEY,
-    initialEntities
+    initialEntities.map((entity) => ({
+      ...entity,
+      type: sanitizeEntityType(entity.type),
+    }))
   );
 
   const [rawRelations, setRawRelations] = useLocalStorageState<Relation[]>(
@@ -545,10 +994,20 @@ export default function App() {
   const entities = useMemo(() => sanitizeEntities(rawEntities), [rawEntities]);
   const relations = useMemo(() => sanitizeRelations(rawRelations), [rawRelations]);
 
+  const [rawEntityTypes, setRawEntityTypes] = useLocalStorageState<EntityTypeDefinition[]>(
+    ENTITY_TYPES_STORAGE_KEY,
+    DEFAULT_ENTITY_TYPES
+  );
+
+  const entityTypes = useMemo(
+    () => sanitizeEntityTypes(rawEntityTypes, entities),
+    [rawEntityTypes, entities]
+  );
+
   const [selectedId, setSelectedId] = useState<string>(
     () => initialEntities[0]?.id ?? ""
   );
-const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard");
+  const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard");
   const [search, setSearch] = useState("");
   const [archiveTypeFilter, setArchiveTypeFilter] = useState<"all" | EntityType>("all");
   const [tagFilter, setTagFilter] = useState("");
@@ -569,15 +1028,29 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
 
   const [graphViewMode, setGraphViewMode] = useState<GraphViewMode>("focused");
   const [graphFilter, setGraphFilter] = useState<FocusedGraphFilter>("all");
-  const [graphViewType, setGraphViewType] = useState<"all" | EntityType>(
-    DEFAULT_GRAPH_VIEW_TYPE
-  );
+  const [graphViewType, setGraphViewType] = useState<"all" | EntityType>("all");
   const [graphViewTag, setGraphViewTag] = useState("");
-  const [graphTypeFilters, setGraphTypeFilters] = useState<Record<EntityType, boolean>>({
-    ...DEFAULT_GRAPH_TYPE_FILTERS,
-  });
+  const [graphTypeFilters, setGraphTypeFilters] = useState<Record<string, boolean>>(
+    () => buildDefaultGraphTypeFilters(DEFAULT_ENTITY_TYPES)
+  );
 
   const [timelinePeriodFilter, setTimelinePeriodFilter] = useState("all");
+
+  useEffect(() => {
+    const nextFilterState = buildDefaultGraphTypeFilters(entityTypes);
+
+    setGraphTypeFilters((current) => {
+      const merged = { ...nextFilterState, ...current };
+
+      entityTypes.forEach((item) => {
+        if (typeof merged[item.id] !== "boolean") {
+          merged[item.id] = true;
+        }
+      });
+
+      return merged;
+    });
+  }, [entityTypes]);
 
   useEffect(() => {
     const exists = entities.some((entity) => entity.id === selectedId);
@@ -585,6 +1058,22 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
       setSelectedId(entities[0]?.id ?? "");
     }
   }, [entities, selectedId]);
+
+  useEffect(() => {
+    const exists = entityTypes.some((type) => type.id === createEntityType);
+    if (!exists) {
+      setCreateEntityType(entityTypes[0]?.id ?? "luogo");
+    }
+  }, [entityTypes, createEntityType]);
+
+  useEffect(() => {
+    if (
+      graphViewType !== "all" &&
+      !entityTypes.some((type) => type.id === graphViewType)
+    ) {
+      setGraphViewType("all");
+    }
+  }, [entityTypes, graphViewType]);
 
   useEffect(() => {
     setRelationTargetId("");
@@ -619,6 +1108,8 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
     const q = search.trim().toLowerCase();
 
     const result = entities.filter((entity) => {
+      const typeLabel = getTypeLabel(entity.type, entityTypes).toLowerCase();
+
       const matchesType =
         archiveTypeFilter === "all" || entity.type === archiveTypeFilter;
 
@@ -635,6 +1126,8 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
         entity.name.toLowerCase().includes(q) ||
         entity.shortDescription.toLowerCase().includes(q) ||
         entity.notes.toLowerCase().includes(q) ||
+        entity.type.toLowerCase().includes(q) ||
+        typeLabel.includes(q) ||
         entity.tags.some((tag) => tag.toLowerCase().includes(q)) ||
         metadataMatches;
 
@@ -647,7 +1140,10 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
       }
 
       if (sortMode === "type") {
-        const typeCompare = a.type.localeCompare(b.type, "it");
+        const typeCompare = getTypeLabel(a.type, entityTypes).localeCompare(
+          getTypeLabel(b.type, entityTypes),
+          "it"
+        );
         if (typeCompare !== 0) return typeCompare;
         return a.name.localeCompare(b.name, "it");
       }
@@ -656,7 +1152,7 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
     });
 
     return result;
-  }, [entities, search, archiveTypeFilter, tagFilter, sortMode]);
+  }, [entities, search, archiveTypeFilter, tagFilter, sortMode, entityTypes]);
 
   const selectedEntity =
     entities.find((entity) => entity.id === selectedId) ?? null;
@@ -711,8 +1207,207 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
     );
   }, [timelineEvents, timelinePeriodFilter]);
 
+  const quickCreateOptions = useMemo(() => {
+    return entityTypes.slice(0, 8).map((type) => ({
+      value: type.id,
+      label: type.label,
+      color: type.color,
+    }));
+  }, [entityTypes]);
+
   function getEntityById(id: string) {
     return entities.find((entity) => entity.id === id);
+  }
+
+  function findEntityByNameAndAllowedTypes(
+    name: string,
+    allowedTypes: EntityType[] | undefined
+  ): Entity | undefined {
+    const normalizedName = normalizeEntityName(name).toLowerCase();
+    if (!normalizedName) return undefined;
+
+    return entities.find((entity) => {
+      const sameName = normalizeEntityName(entity.name).toLowerCase() === normalizedName;
+      if (!sameName) return false;
+
+      if (!allowedTypes || allowedTypes.length === 0) {
+        return true;
+      }
+
+      return allowedTypes.includes(entity.type);
+    });
+  }
+
+  function createAutoTargetEntity(
+    name: string,
+    fieldAutoCreateType: EntityType | undefined,
+    allowedTypes: EntityType[] | undefined
+  ): Entity | null {
+    const normalizedName = normalizeEntityName(name);
+    if (!normalizedName) return null;
+
+    const targetType =
+      fieldAutoCreateType ??
+      allowedTypes?.[0] ??
+      entityTypes[0]?.id ??
+      "luogo";
+
+    const alreadyExisting = findEntityByNameAndAllowedTypes(normalizedName, [targetType]);
+    if (alreadyExisting) {
+      return alreadyExisting;
+    }
+
+    const created = createEntityRecord(
+      {
+        type: targetType,
+        name: normalizedName,
+        shortDescription: "",
+      },
+      entityTypes
+    );
+
+    setRawEntities((current) => [created, ...sanitizeEntities(current)]);
+    return created;
+  }
+
+  function buildMetadataRelation(params: {
+    sourceEntity: Entity;
+    fieldKey: string;
+    targetEntityId: string;
+    relationType: string;
+    relationInverseType?: string;
+  }): Relation {
+    return {
+      id: crypto.randomUUID(),
+      fromEntityId: params.sourceEntity.id,
+      toEntityId: params.targetEntityId,
+      type: normalizeRelationType(params.relationType),
+      inverseType: normalizeOptionalRelationType(params.relationInverseType),
+      source: "metadata",
+      sourceFieldKey: params.fieldKey,
+    };
+  }
+
+  function syncMetadataReferenceField(params: {
+    sourceEntity: Entity;
+    fieldKey: string;
+    nextValue: string;
+  }) {
+    const field = getMetadataFieldDefinition(
+      params.sourceEntity.type,
+      params.fieldKey,
+      entityTypes
+    );
+
+    if (!field || field.kind !== "entity-reference") {
+      return;
+    }
+
+    const normalizedValue = normalizeMetadataValue(params.nextValue);
+
+    setRawRelations((currentRawRelations) => {
+      const currentRelations = sanitizeRelations(currentRawRelations);
+
+      const relationsWithoutPreviousAuto = currentRelations.filter(
+        (relation) =>
+          !isSameMetadataRelationOrigin(
+            relation,
+            params.sourceEntity.id,
+            params.fieldKey
+          )
+      );
+
+      if (!normalizedValue) {
+        return relationsWithoutPreviousAuto;
+      }
+
+      let targetEntity = findEntityByNameAndAllowedTypes(
+        normalizedValue,
+        field.allowedEntityTypes
+      );
+
+      if (!targetEntity && field.autoCreateTarget) {
+        targetEntity =
+          createAutoTargetEntity(
+            normalizedValue,
+            field.autoCreateTargetType,
+            field.allowedEntityTypes
+          ) ?? undefined;
+      }
+
+      if (!targetEntity) {
+        return relationsWithoutPreviousAuto;
+      }
+
+      if (targetEntity.id === params.sourceEntity.id) {
+        return relationsWithoutPreviousAuto;
+      }
+
+      const normalizedRelationType = normalizeRelationType(field.relationType ?? "");
+      if (!normalizedRelationType) {
+        return relationsWithoutPreviousAuto;
+      }
+
+      const normalizedInverse = normalizeOptionalRelationType(
+        field.relationInverseType
+      );
+
+      const duplicate = relationsWithoutPreviousAuto.some(
+        (relation) =>
+          relation.fromEntityId === params.sourceEntity.id &&
+          relation.toEntityId === targetEntity!.id &&
+          normalizeRelationType(relation.type) === normalizedRelationType &&
+          normalizeOptionalRelationType(relation.inverseType) === normalizedInverse &&
+          relation.source === "metadata" &&
+          relation.sourceFieldKey === params.fieldKey
+      );
+
+      if (duplicate) {
+        return relationsWithoutPreviousAuto;
+      }
+
+      return [
+        buildMetadataRelation({
+          sourceEntity: params.sourceEntity,
+          fieldKey: params.fieldKey,
+          targetEntityId: targetEntity.id,
+          relationType: normalizedRelationType,
+          relationInverseType: normalizedInverse,
+        }),
+        ...relationsWithoutPreviousAuto,
+      ];
+    });
+  }
+
+  function updateSelectedEntityMetadataField(
+    fieldKey: string,
+    value: string,
+    options?: {
+      commitReference?: boolean;
+    }
+  ) {
+    if (!selectedEntity) return;
+
+    const normalizedValue = normalizeMetadataValue(value);
+
+    const nextMetadata = {
+      ...(selectedEntity.metadata ?? {}),
+      [fieldKey]: normalizedValue,
+    };
+
+    updateSelectedEntity({
+      metadata: nextMetadata,
+    });
+
+    if (!options?.commitReference) {
+      return;
+    }
+
+    syncMetadataReferenceField({
+      sourceEntity: selectedEntity,
+      fieldKey,
+      nextValue: normalizedValue,
+    });
   }
 
   function toggleGraphTypeFilter(type: EntityType) {
@@ -726,14 +1421,15 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
     if (!selectedEntity) return;
 
     const normalizedPatch: Partial<Entity> = { ...patch };
-    const nextType = normalizedPatch.type ?? selectedEntity.type;
+    const nextType = normalizeEntityTypeForPatch(
+      normalizedPatch.type ?? selectedEntity.type,
+      entityTypes
+    );
 
     if (typeof normalizedPatch.name === "string") {
       const trimmedName = normalizeEntityName(normalizedPatch.name);
 
-      if (!trimmedName) {
-        return;
-      }
+      if (!trimmedName) return;
 
       if (
         hasDuplicateEntityName(
@@ -745,6 +1441,12 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
       ) {
         return;
       }
+
+      normalizedPatch.name = trimmedName;
+    }
+
+    if (typeof normalizedPatch.type === "string") {
+      normalizedPatch.type = nextType;
     }
 
     if (Array.isArray(normalizedPatch.tags)) {
@@ -764,7 +1466,8 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
     if (normalizedPatch.type && !patch.metadata) {
       normalizedPatch.metadata = remapMetadataForType(
         selectedEntity.metadata,
-        normalizedPatch.type
+        normalizedPatch.type,
+        entityTypes
       );
     }
 
@@ -781,15 +1484,23 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
               metadata:
                 normalizedPatch.metadata ??
                 entity.metadata ??
-                getDefaultMetadata(nextType),
+                getDefaultMetadata(nextType, entityTypes),
             }
           : entity
       )
     );
   }
 
+  function normalizeEntityTypeForPatch(
+    type: string,
+    availableTypes: EntityTypeDefinition[]
+  ) {
+    const safeType = sanitizeEntityType(type);
+    return availableTypes.some((item) => item.id === safeType) ? safeType : "luogo";
+  }
+
   function handleOpenCreateEntity(type: EntityType = "luogo") {
-    setCreateEntityType(type);
+    setCreateEntityType(normalizeEntityTypeForPatch(type, entityTypes));
     setIsCreatingEntity(true);
     setIsFloatingCreateOpen(false);
   }
@@ -805,27 +1516,62 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
   }): boolean {
     const normalizedName = normalizeEntityName(data.name);
     const normalizedDescription = normalizeText(data.shortDescription);
+    const normalizedType = normalizeEntityTypeForPatch(data.type, entityTypes);
 
     if (!normalizedName) {
       alert("Il nome è obbligatorio.");
       return false;
     }
 
-    if (hasDuplicateEntityName(entities, data.type, normalizedName)) {
+    if (hasDuplicateEntityName(entities, normalizedType, normalizedName)) {
       alert("Esiste già un'entità dello stesso tipo con questo nome.");
       return false;
     }
 
-    const newEntity = createEntity(entities, {
-      type: data.type,
-      name: normalizedName,
-      shortDescription: normalizedDescription,
-    });
+    const newEntity = createEntityRecord(
+      {
+        type: normalizedType,
+        name: normalizedName,
+        shortDescription: normalizedDescription,
+      },
+      entityTypes
+    );
 
     setRawEntities((current) => [newEntity, ...sanitizeEntities(current)]);
     setSelectedId(newEntity.id);
     setNewTag("");
     setIsCreatingEntity(false);
+    return true;
+  }
+
+  function handleCreateEntityType(data: { label: string; color: string }): boolean {
+    const normalizedLabel = data.label.trim().replace(/\s+/g, " ");
+    const normalizedId = slugifyEntityTypeId(normalizedLabel);
+
+    if (!normalizedLabel || !normalizedId) {
+      alert("Il nome del tipo è obbligatorio.");
+      return false;
+    }
+
+    const alreadyExists = entityTypes.some(
+      (type) => type.id === normalizedId || type.label.toLowerCase() === normalizedLabel.toLowerCase()
+    );
+
+    if (alreadyExists) {
+      alert("Esiste già un tipo con questo nome.");
+      return false;
+    }
+
+    const nextType: EntityTypeDefinition = {
+      id: normalizedId,
+      label: normalizedLabel,
+      color: data.color?.trim() || "#64748b",
+      builtIn: false,
+      fields: [],
+    };
+
+    setRawEntityTypes((current) => sanitizeEntityTypes(current).concat(nextType));
+    setCreateEntityType(nextType.id);
     return true;
   }
 
@@ -841,6 +1587,7 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
       name: duplicateName,
       tags: [...selectedEntity.tags],
       metadata: { ...(selectedEntity.metadata ?? {}) },
+      image: selectedEntity.image,
       createdAt: nowIso,
       updatedAt: nowIso,
       lastModified: Date.now(),
@@ -917,8 +1664,15 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
 
     localStorage.removeItem(ENTITIES_STORAGE_KEY);
     localStorage.removeItem(RELATIONS_STORAGE_KEY);
+    localStorage.removeItem(ENTITY_TYPES_STORAGE_KEY);
 
-    setRawEntities(initialEntities);
+    setRawEntityTypes(DEFAULT_ENTITY_TYPES);
+    setRawEntities(
+      initialEntities.map((entity) => ({
+        ...entity,
+        type: sanitizeEntityType(entity.type),
+      }))
+    );
     setRawRelations(initialRelations);
     setSelectedId(initialEntities[0]?.id ?? "");
     setSearch("");
@@ -935,15 +1689,16 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
     setRelationTargetId("");
     setGraphViewMode("focused");
     setGraphFilter("all");
-    setGraphViewType(DEFAULT_GRAPH_VIEW_TYPE);
+    setGraphViewType("all");
     setGraphViewTag("");
     setTimelinePeriodFilter("all");
-    setGraphTypeFilters({ ...DEFAULT_GRAPH_TYPE_FILTERS });
+    setGraphTypeFilters(buildDefaultGraphTypeFilters(DEFAULT_ENTITY_TYPES));
     setIsFloatingCreateOpen(false);
   }
 
   function exportData() {
     const data: WorldData = {
+      entityTypes,
       entities,
       relations,
     };
@@ -972,6 +1727,13 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
       return false;
     }
 
+    if (
+      typeof candidate.entityTypes !== "undefined" &&
+      !Array.isArray(candidate.entityTypes)
+    ) {
+      return false;
+    }
+
     const entitiesValid = candidate.entities.every((entity) => {
       return (
         entity &&
@@ -980,7 +1742,8 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
         typeof entity.name === "string" &&
         typeof entity.shortDescription === "string" &&
         typeof entity.notes === "string" &&
-        Array.isArray(entity.tags)
+        Array.isArray(entity.tags) &&
+        (typeof entity.image === "undefined" || typeof entity.image === "string")
       );
     });
 
@@ -992,11 +1755,56 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
         typeof relation.toEntityId === "string" &&
         typeof relation.type === "string" &&
         (typeof relation.inverseType === "undefined" ||
-          typeof relation.inverseType === "string")
+          typeof relation.inverseType === "string") &&
+        (typeof relation.source === "undefined" ||
+          relation.source === "manual" ||
+          relation.source === "metadata") &&
+        (typeof relation.sourceFieldKey === "undefined" ||
+          typeof relation.sourceFieldKey === "string")
       );
     });
 
-    return entitiesValid && relationsValid;
+    const entityTypesValid =
+      typeof candidate.entityTypes === "undefined" ||
+      candidate.entityTypes.every((type) => {
+        const fieldsValid =
+          typeof type.fields === "undefined" ||
+          (Array.isArray(type.fields) &&
+            type.fields.every((field) => {
+              return (
+                field &&
+                typeof field.key === "string" &&
+                typeof field.label === "string" &&
+                (field.kind === "text" ||
+                  field.kind === "textarea" ||
+                  field.kind === "entity-reference") &&
+                (typeof field.placeholder === "undefined" ||
+                  typeof field.placeholder === "string") &&
+                (typeof field.required === "undefined" ||
+                  typeof field.required === "boolean") &&
+                (typeof field.allowedEntityTypes === "undefined" ||
+                  Array.isArray(field.allowedEntityTypes)) &&
+                (typeof field.relationType === "undefined" ||
+                  typeof field.relationType === "string") &&
+                (typeof field.relationInverseType === "undefined" ||
+                  typeof field.relationInverseType === "string") &&
+                (typeof field.autoCreateTarget === "undefined" ||
+                  typeof field.autoCreateTarget === "boolean") &&
+                (typeof field.autoCreateTargetType === "undefined" ||
+                  typeof field.autoCreateTargetType === "string")
+              );
+            }));
+
+        return (
+          type &&
+          typeof type.id === "string" &&
+          typeof type.label === "string" &&
+          typeof type.color === "string" &&
+          fieldsValid
+        );
+      });
+
+    return entitiesValid && relationsValid && entityTypesValid;
   }
 
   function importData(event: React.ChangeEvent<HTMLInputElement>) {
@@ -1018,42 +1826,12 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
           throw new Error("Formato JSON non valido.");
         }
 
-        const sanitizedEntities = parsed.entities.map((entity) => {
-          const nowIso = new Date().toISOString();
-          const nowNum = Date.now();
-
-          return {
-            ...entity,
-            id:
-              typeof entity.id === "string" && entity.id
-                ? entity.id
-                : crypto.randomUUID(),
-            name: normalizeEntityName(entity.name),
-            shortDescription: normalizeText(entity.shortDescription),
-            notes: entity.notes,
-            tags: entity.tags
-              .map(normalizeTag)
-              .filter(Boolean)
-              .filter(
-                (tag, index, array) =>
-                  array.findIndex((currentTag) => currentTag === tag) === index
-              ),
-            metadata: remapMetadataForType(
-              normalizeMetadata(entity.metadata),
-              entity.type
-            ),
-            createdAt:
-              typeof entity.createdAt === "string" ? entity.createdAt : nowIso,
-            updatedAt:
-              typeof entity.updatedAt === "string" ? entity.updatedAt : nowIso,
-            lastModified:
-              typeof entity.lastModified === "number"
-                ? entity.lastModified
-                : nowNum,
-          } satisfies Entity;
-        });
-
+        const sanitizedEntities = sanitizeEntities(parsed.entities);
         const entityIdSet = new Set(sanitizedEntities.map((entity) => entity.id));
+        const sanitizedEntityTypes = sanitizeEntityTypes(
+          parsed.entityTypes ?? DEFAULT_ENTITY_TYPES,
+          sanitizedEntities
+        );
 
         const sanitizedRelations = parsed.relations
           .map((relation) => ({
@@ -1066,6 +1844,14 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
             toEntityId: relation.toEntityId,
             type: normalizeRelationType(relation.type),
             inverseType: normalizeOptionalRelationType(relation.inverseType),
+            source:
+              relation.source === "manual" || relation.source === "metadata"
+                ? relation.source
+                : undefined,
+            sourceFieldKey:
+              typeof relation.sourceFieldKey === "string"
+                ? relation.sourceFieldKey
+                : undefined,
           }))
           .filter(
             (relation) =>
@@ -1086,6 +1872,7 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
           return;
         }
 
+        setRawEntityTypes(sanitizedEntityTypes);
         setRawEntities(sanitizedEntities);
         setRawRelations(sanitizedRelations);
 
@@ -1095,7 +1882,7 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
         setTagFilter("");
         setSortMode("lastModified-desc");
         setIsCreatingEntity(false);
-        setCreateEntityType("luogo");
+        setCreateEntityType(sanitizedEntityTypes[0]?.id ?? "luogo");
         setNewTag("");
         setRelationType(RELATION_PRESETS[DEFAULT_RELATION_PRESET_INDEX]?.type ?? "");
         setRelationInverseType(
@@ -1104,10 +1891,10 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
         setRelationTargetId("");
         setGraphViewMode("focused");
         setGraphFilter("all");
-        setGraphViewType(DEFAULT_GRAPH_VIEW_TYPE);
+        setGraphViewType("all");
         setGraphViewTag("");
         setTimelinePeriodFilter("all");
-        setGraphTypeFilters({ ...DEFAULT_GRAPH_TYPE_FILTERS });
+        setGraphTypeFilters(buildDefaultGraphTypeFilters(sanitizedEntityTypes));
         setIsFloatingCreateOpen(false);
 
         alert("Import completato con successo.");
@@ -1204,6 +1991,7 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
       toEntityId: relationTargetId,
       type: normalizedType,
       inverseType: normalizedInverseType,
+      source: "manual",
     };
 
     setRawRelations((current) => [newRelation, ...sanitizeRelations(current)]);
@@ -1237,6 +2025,7 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
       return buildGraphElements(
         focused.localEntities,
         focused.localRelations,
+        entityTypes,
         selectedEntity.id,
         focused.level0Ids,
         focused.level1Ids,
@@ -1255,7 +2044,12 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
           allowedIds.has(relation.toEntityId)
       );
 
-      return buildGraphElements(localEntities, localRelations, selectedEntity.id);
+      return buildGraphElements(
+        localEntities,
+        localRelations,
+        entityTypes,
+        selectedEntity.id
+      );
     }
 
     if (graphViewMode === "type-only") {
@@ -1272,7 +2066,12 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
           allowedIds.has(relation.toEntityId)
       );
 
-      return buildGraphElements(localEntities, localRelations, selectedEntity.id);
+      return buildGraphElements(
+        localEntities,
+        localRelations,
+        entityTypes,
+        selectedEntity.id
+      );
     }
 
     const normalizedTag = normalizeTag(graphViewTag);
@@ -1291,10 +2090,16 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
         allowedIds.has(relation.toEntityId)
     );
 
-    return buildGraphElements(localEntities, localRelations, selectedEntity.id);
+    return buildGraphElements(
+      localEntities,
+      localRelations,
+      entityTypes,
+      selectedEntity.id
+    );
   }, [
     entities,
     relations,
+    entityTypes,
     selectedEntity,
     graphViewMode,
     graphFilter,
@@ -1306,66 +2111,67 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
   const showEmptyState = !selectedEntity;
 
   return view === "dashboard" ? (
-  <div
-    style={{
-      ...pageStyle,
-      background:
-        "radial-gradient(circle at top, rgba(59,130,246,0.08), transparent 24%), linear-gradient(180deg, #0b1020 0%, #111827 100%)",
-    }}
-  >
-    <div style={pageContainerStyle}>
-      <WorldDashboard
-        entities={entities}
-        relations={relations}
-        onOpenEntity={(id) => {
-          setSelectedId(id);
-          setView("workspace");
-        }}
-        onEnterWorkspace={() => setView("workspace")}
-        onCreateEntity={() => {
-          setCreateEntityType("luogo");
-          setIsCreatingEntity(true);
-          setView("workspace");
-        }}
-      />
+    <div
+      style={{
+        ...pageStyle,
+        background:
+          "radial-gradient(circle at top, rgba(59,130,246,0.08), transparent 24%), linear-gradient(180deg, #0b1020 0%, #111827 100%)",
+      }}
+    >
+      <div style={pageContainerStyle}>
+        <WorldDashboard
+          entities={entities}
+          relations={relations}
+          onOpenEntity={(id) => {
+            setSelectedId(id);
+            setView("workspace");
+          }}
+          onEnterWorkspace={() => setView("workspace")}
+          onCreateEntity={() => {
+            setCreateEntityType(entityTypes[0]?.id ?? "luogo");
+            setIsCreatingEntity(true);
+            setView("workspace");
+          }}
+        />
+      </div>
     </div>
-  </div>
-) : view === "graph" ? (
-  <div
-    style={{
-      ...pageStyle,
-      background:
-        "radial-gradient(circle at top, rgba(59,130,246,0.08), transparent 24%), linear-gradient(180deg, #0b1020 0%, #111827 100%)",
-    }}
-  >
-   <div style={pageContainerStyle}>
-  <GraphView
-    selectedEntity={selectedEntity}
-    graphViewMode={graphViewMode}
-    graphFilter={graphFilter}
-    graphTypeFilters={graphTypeFilters}
-    graphViewType={graphViewType}
-    graphViewTag={graphViewTag}
-    allTags={allTags}
-    graphData={graphData}
-    onGraphViewModeChange={setGraphViewMode}
-    onGraphFilterChange={setGraphFilter}
-    onToggleGraphTypeFilter={toggleGraphTypeFilter}
-    onGraphViewTypeChange={setGraphViewType}
-    onGraphViewTagChange={setGraphViewTag}
-    onNodeClick={setSelectedId}
-    getEntityById={getEntityById}
-    onBackToWorkspace={() => setView("workspace")}
-    onGoToDashboard={() => setView("dashboard")}
-    onOpenEntityInEditor={() => {
-      if (selectedEntity) {
-        setView("workspace");
-      }
-    }}
-  />
-</div>
-  </div>
-) : (
+  ) : view === "graph" ? (
+    <div
+      style={{
+        ...pageStyle,
+        background:
+          "radial-gradient(circle at top, rgba(59,130,246,0.08), transparent 24%), linear-gradient(180deg, #0b1020 0%, #111827 100%)",
+      }}
+    >
+      <div style={pageContainerStyle}>
+        <GraphView
+          entityTypes={entityTypes}
+          selectedEntity={selectedEntity}
+          graphViewMode={graphViewMode}
+          graphFilter={graphFilter}
+          graphTypeFilters={graphTypeFilters}
+          graphViewType={graphViewType}
+          graphViewTag={graphViewTag}
+          allTags={allTags}
+          graphData={graphData}
+          onGraphViewModeChange={setGraphViewMode}
+          onGraphFilterChange={setGraphFilter}
+          onToggleGraphTypeFilter={toggleGraphTypeFilter}
+          onGraphViewTypeChange={setGraphViewType}
+          onGraphViewTagChange={setGraphViewTag}
+          onNodeClick={setSelectedId}
+          getEntityById={getEntityById}
+          onBackToWorkspace={() => setView("workspace")}
+          onGoToDashboard={() => setView("dashboard")}
+          onOpenEntityInEditor={() => {
+            if (selectedEntity) {
+              setView("workspace");
+            }
+          }}
+        />
+      </div>
+    </div>
+  ) : (
     <div
       style={{
         ...pageStyle,
@@ -1403,29 +2209,29 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
             <button
               type="button"
               onClick={() => setView("dashboard")}
-    style={secondaryButtonLargeStyle}
+              style={secondaryButtonLargeStyle}
+            >
+              Dashboard
+            </button>
 
-  >
-    Dashboard
-  </button>
- <button
-  type="button"
-  onClick={() => {
-    if (!selectedId && entities.length > 0) {
-      setSelectedId(entities[0].id);
-    }
-    setView("graph");
-  }}
-  style={secondaryButtonLargeStyle}
->
-  Apri grafo
-</button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!selectedId && entities.length > 0) {
+                  setSelectedId(entities[0].id);
+                }
+                setView("graph");
+              }}
+              style={secondaryButtonLargeStyle}
+            >
+              Apri grafo
+            </button>
 
-  <button
-    type="button"
-    onClick={() => handleOpenCreateEntity()}
-    style={primaryButtonLargeStyle}
-  >
+            <button
+              type="button"
+              onClick={() => handleOpenCreateEntity()}
+              style={primaryButtonLargeStyle}
+            >
               + Nuova entità
             </button>
 
@@ -1468,6 +2274,7 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
 
             {isCreatingEntity ? (
               <NewEntityForm
+                entityTypes={entityTypes}
                 entities={entities}
                 initialType={createEntityType}
                 onCancel={handleCancelCreateEntity}
@@ -1496,15 +2303,14 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
             }}
           >
             <Sidebar
+              entityTypes={entityTypes}
               entities={filteredEntities}
               allTags={allTags}
               selectedEntityId={selectedId}
               searchTerm={search}
               setSearchTerm={setSearch}
-              typeFilter={archiveTypeFilter === "all" ? "tutti" : archiveTypeFilter}
-              setTypeFilter={(value) =>
-                setArchiveTypeFilter(value === "tutti" ? "all" : value)
-              }
+              typeFilter={archiveTypeFilter === "all" ? "all" : archiveTypeFilter}
+              setTypeFilter={setArchiveTypeFilter}
               tagFilter={tagFilter}
               setTagFilter={setTagFilter}
               sortMode={sortMode}
@@ -1518,14 +2324,18 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
               onOpenCreateEntity={handleOpenCreateEntity}
               onCancelCreateEntity={handleCancelCreateEntity}
               onCreateEntity={handleCreateEntity}
+              onCreateEntityType={handleCreateEntityType}
               searchInputRef={searchInputRef}
             />
 
             <div style={{ display: "grid", gap: "16px", minWidth: 0 }}>
               <EntityEditor
+                entityTypes={entityTypes}
+                entities={entities}
                 selectedEntity={selectedEntity}
                 newTag={newTag}
                 onUpdateEntity={updateSelectedEntity}
+                onUpdateMetadataField={updateSelectedEntityMetadataField}
                 onNewTagChange={setNewTag}
                 onAddTag={addTag}
                 onRemoveTag={removeTag}
@@ -1698,26 +2508,25 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
                 )}
               </div>
 
-              
-
-            <RelationsPanel
-  entities={entities}
-  relations={relations}
-  selectedEntity={selectedEntity}
-  availableRelationTargets={availableRelationTargets}
-  selectedEntityRelations={selectedEntityRelations}
-  relationType={relationType}
-  relationInverseType={relationInverseType}
-  relationTargetId={relationTargetId}
-  relationPresets={RELATION_PRESETS}
-  onRelationTypeChange={handleRelationTypeChange}
-  onRelationInverseTypeChange={setRelationInverseType}
-  onRelationTargetIdChange={setRelationTargetId}
-  onAddRelation={addRelation}
-  onDeleteRelation={deleteRelation}
-  getEntityById={getEntityById}
-/>
-</div>
+              <RelationsPanel
+                entityTypes={entityTypes}
+                entities={entities}
+                relations={relations}
+                selectedEntity={selectedEntity}
+                availableRelationTargets={availableRelationTargets}
+                selectedEntityRelations={selectedEntityRelations}
+                relationType={relationType}
+                relationInverseType={relationInverseType}
+                relationTargetId={relationTargetId}
+                relationPresets={RELATION_PRESETS}
+                onRelationTypeChange={handleRelationTypeChange}
+                onRelationInverseTypeChange={setRelationInverseType}
+                onRelationTargetIdChange={setRelationTargetId}
+                onAddRelation={addRelation}
+                onDeleteRelation={deleteRelation}
+                getEntityById={getEntityById}
+              />
+            </div>
           </div>
         )}
       </div>
@@ -1748,7 +2557,7 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
                 minWidth: "220px",
               }}
             >
-              {QUICK_CREATE_OPTIONS.map((option) => (
+              {quickCreateOptions.map((option) => (
                 <button
                   key={option.value}
                   type="button"
@@ -1770,7 +2579,7 @@ const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard
                       width: "10px",
                       height: "10px",
                       borderRadius: "999px",
-                      backgroundColor: getTypeColor(option.value),
+                      backgroundColor: option.color,
                       flexShrink: 0,
                     }}
                   />

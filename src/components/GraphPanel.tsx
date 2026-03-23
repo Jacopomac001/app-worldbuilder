@@ -20,10 +20,8 @@ import {
 } from "@xyflow/react";
 import {
   GRAPH_FOCUSED_FILTER_OPTIONS,
-  GRAPH_TYPE_TOGGLE_OPTIONS,
   GRAPH_VIEW_MODE_DESCRIPTIONS,
   GRAPH_VIEW_MODE_OPTIONS,
-  GRAPH_VIEW_TYPE_OPTIONS,
   UI_TEXT,
 } from "../config";
 import {
@@ -32,8 +30,8 @@ import {
   selectStyle,
   typeToggleStyle,
 } from "../styles";
-import type { Entity, EntityType } from "../types";
-import { getTypeColor } from "../utils/entity";
+import type { Entity, EntityType, EntityTypeDefinition } from "../types";
+import { getEntityTypeLabel, getTypeColor } from "../utils/entity";
 
 export type GraphViewMode = "focused" | "global" | "type-only" | "tag-based";
 export type FocusedGraphFilter = "all" | "outgoing" | "incoming";
@@ -64,6 +62,7 @@ type GraphEdgeData = {
 };
 
 type GraphPanelProps = {
+  entityTypes: EntityTypeDefinition[];
   graphViewMode: GraphViewMode;
   graphFilter: FocusedGraphFilter;
   graphTypeFilters: Record<EntityType, boolean>;
@@ -551,6 +550,7 @@ const graphCanvasStyle: React.CSSProperties = {
 };
 
 export default function GraphPanel({
+  entityTypes,
   graphViewMode,
   graphFilter,
   graphTypeFilters,
@@ -847,8 +847,9 @@ export default function GraphPanel({
                 }
                 style={selectStyle}
               >
-                {GRAPH_VIEW_TYPE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
+                <option value="all">Tutti i tipi</option>
+                {entityTypes.map((option) => (
+                  <option key={option.id} value={option.id}>
                     {option.label}
                   </option>
                 ))}
@@ -872,15 +873,16 @@ export default function GraphPanel({
 
             {showTypeToggles ? (
               <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                {GRAPH_TYPE_TOGGLE_OPTIONS.map((option) => (
+                {entityTypes.map((option) => (
                   <button
-                    key={option.value}
+                    key={option.id}
                     type="button"
-                    onClick={() => onToggleGraphTypeFilter(option.value)}
+                    onClick={() => onToggleGraphTypeFilter(option.id)}
                     style={typeToggleStyle(
-                      graphTypeFilters[option.value],
-                      option.value
+                      Boolean(graphTypeFilters[option.id]),
+                      option.id
                     )}
+                    title={getEntityTypeLabel(option.id, entityTypes)}
                   >
                     {option.label}
                   </button>
@@ -992,7 +994,7 @@ export default function GraphPanel({
               }}
               nodeColor={(node) => {
                 const entity = getEntityById(String(node.id));
-                return entity ? getTypeColor(entity.type) : "#334155";
+                return entity ? getTypeColor(entity.type, entityTypes) : "#334155";
               }}
             />
 

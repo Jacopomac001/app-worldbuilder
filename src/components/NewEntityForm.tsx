@@ -1,8 +1,8 @@
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ENTITY_TYPE_OPTIONS, UI_TEXT } from "../config";
+import { UI_TEXT } from "../config";
 import { inputStyle, primaryButtonStyle, selectStyle } from "../styles";
-import type { Entity, EntityType } from "../types";
+import type { Entity, EntityType, EntityTypeDefinition } from "../types";
 import {
   getEntityTypeLabel,
   hasDuplicateEntityName,
@@ -11,6 +11,7 @@ import {
 } from "../utils/entity";
 
 type NewEntityFormProps = {
+  entityTypes: EntityTypeDefinition[];
   entities: Entity[];
   initialType?: EntityType;
   onCreate: (data: {
@@ -65,6 +66,7 @@ const errorStyle: React.CSSProperties = {
 };
 
 export default function NewEntityForm({
+  entityTypes,
   entities,
   initialType = "luogo",
   onCreate,
@@ -78,8 +80,9 @@ export default function NewEntityForm({
   const nameInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    setType(initialType);
-  }, [initialType]);
+    const typeExists = entityTypes.some((item) => item.id === initialType);
+    setType(typeExists ? initialType : entityTypes[0]?.id ?? "luogo");
+  }, [initialType, entityTypes]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -121,8 +124,9 @@ export default function NewEntityForm({
 
     if (duplicateName) {
       setError(
-        `Esiste già un${type === "evento" ? "" : "a"} ${getEntityTypeLabel(
-          type
+        `Esiste già un'entità di tipo ${getEntityTypeLabel(
+          type,
+          entityTypes
         ).toLowerCase()} con questo nome.`
       );
       return;
@@ -140,7 +144,7 @@ export default function NewEntityForm({
     }
 
     setError("");
-    setType(initialType);
+    setType(entityTypes.some((item) => item.id === initialType) ? initialType : entityTypes[0]?.id ?? "luogo");
     setName("");
     setShortDescription("");
   }
@@ -157,8 +161,8 @@ export default function NewEntityForm({
           }}
           style={selectStyle}
         >
-          {ENTITY_TYPE_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
+          {entityTypes.map((option) => (
+            <option key={option.id} value={option.id}>
               {option.label}
             </option>
           ))}

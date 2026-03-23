@@ -23,21 +23,13 @@ import {
 } from "lucide-react";
 import type { EntityType } from "../types";
 
-/* -------------------------------------------------------------------------- */
-/*                             ICONE PER TIPO ENTITÀ                          */
-/* -------------------------------------------------------------------------- */
-
-export const entityTypeIcons: Record<EntityType, LucideIcon> = {
+export const entityTypeIcons: Record<string, LucideIcon> = {
   luogo: MapPinned,
   personaggio: Users,
   fazione: Shield,
   oggetto: Gem,
   evento: CalendarRange,
 };
-
-/* -------------------------------------------------------------------------- */
-/*                                ICONE UI                                    */
-/* -------------------------------------------------------------------------- */
 
 export const uiIcons = {
   archive: Boxes,
@@ -54,16 +46,9 @@ export const uiIcons = {
   sectionClosed: ChevronDown,
   settlement: Castle,
   conflict: Swords,
-
-  // ⭐ AGGIUNTA IMPORTANTE
-  // Usata nella GraphView per i nodi
   node: Circle,
 } as const;
 
-/* -------------------------------------------------------------------------- */
-/*                             FUNZIONI UTILI                                 */
-/* -------------------------------------------------------------------------- */
-
 export function getEntityTypeIcon(type: EntityType): LucideIcon {
-  return entityTypeIcons[type];
+  return entityTypeIcons[type] ?? Circle;
 }

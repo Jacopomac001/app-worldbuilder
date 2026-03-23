@@ -7,7 +7,7 @@ import {
   primaryButtonStyle,
   selectStyle,
 } from "../styles";
-import type { Entity, Relation } from "../types";
+import type { Entity, EntityTypeDefinition, Relation } from "../types";
 import type { RelationPreset } from "../utils/entity";
 import {
   getEntityTypeLabel,
@@ -17,6 +17,7 @@ import {
 import { getEntityTypeIcon, uiIcons } from "../utils/icons";
 
 type RelationsPanelProps = {
+  entityTypes: EntityTypeDefinition[];
   entities: Entity[];
   relations: Relation[];
   selectedEntity: Entity;
@@ -51,6 +52,7 @@ const relationMetaTextStyle: React.CSSProperties = {
 };
 
 export default function RelationsPanel({
+  entityTypes,
   entities,
   relations,
   selectedEntity,
@@ -70,7 +72,7 @@ export default function RelationsPanel({
   const normalizedType = relationType.trim().toLowerCase();
   const matchingPreset =
     relationPresets.find((preset) => preset.type === normalizedType) ?? null;
-  const selectedAccent = getTypeColor(selectedEntity.type);
+  const selectedAccent = getTypeColor(selectedEntity.type, entityTypes);
   const SelectedEntityIcon = getEntityTypeIcon(selectedEntity.type);
 
   return (
@@ -140,7 +142,7 @@ export default function RelationsPanel({
               {selectedEntity.name}
             </div>
             <div style={relationMetaTextStyle}>
-              {getEntityTypeLabel(selectedEntity.type)}
+              {getEntityTypeLabel(selectedEntity.type, entityTypes)}
             </div>
           </div>
         </div>
@@ -227,7 +229,7 @@ export default function RelationsPanel({
             <option value="">{UI_TEXT.relationTargetPlaceholder}</option>
             {availableRelationTargets.map((entity) => (
               <option key={entity.id} value={entity.id}>
-                {entity.name} — {getEntityTypeLabel(entity.type)}
+                {entity.name} — {getEntityTypeLabel(entity.type, entityTypes)}
               </option>
             ))}
           </select>
@@ -288,7 +290,9 @@ export default function RelationsPanel({
                 isOutgoing ? "outgoing" : "incoming"
               );
 
-              const accent = otherEntity ? getTypeColor(otherEntity.type) : "#64748b";
+              const accent = otherEntity
+                ? getTypeColor(otherEntity.type, entityTypes)
+                : "#64748b";
               const OtherIcon = otherEntity
                 ? getEntityTypeIcon(otherEntity.type)
                 : null;
@@ -312,7 +316,14 @@ export default function RelationsPanel({
                       gap: "10px",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "flex-start", gap: "10px", minWidth: 0 }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: "10px",
+                        minWidth: 0,
+                      }}
+                    >
                       {OtherIcon ? (
                         <div
                           style={{
@@ -346,7 +357,7 @@ export default function RelationsPanel({
 
                         <div style={relationMetaTextStyle}>
                           {otherEntity
-                            ? getEntityTypeLabel(otherEntity.type)
+                            ? getEntityTypeLabel(otherEntity.type, entityTypes)
                             : "Entità non trovata"}
                         </div>
                       </div>
@@ -401,6 +412,17 @@ export default function RelationsPanel({
                       Tipo base: <strong>{relation.type}</strong>
                     </div>
                   )}
+
+                  {relation.source === "metadata" ? (
+                    <div style={relationMetaTextStyle}>
+                      Origine: <strong>campo metadata</strong>
+                      {relation.sourceFieldKey ? ` · ${relation.sourceFieldKey}` : ""}
+                    </div>
+                  ) : relation.source === "manual" ? (
+                    <div style={relationMetaTextStyle}>
+                      Origine: <strong>manuale</strong>
+                    </div>
+                  ) : null}
                 </div>
               );
             })}
