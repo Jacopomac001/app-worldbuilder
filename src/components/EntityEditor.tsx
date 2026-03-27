@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Camera,
   ImagePlus,
@@ -34,6 +34,11 @@ import {
   remapMetadataForType,
 } from "../utils/entity";
 import { getEntityTypeIcon, uiIcons } from "../utils/icons";
+import {
+  deleteImageAssetByRef,
+  resolveImageRefToSrc,
+  saveImageFileAsAssetRef,
+} from "../utils/imageStorage";
 
 type EntityEditorProps = {
   entityTypes: EntityTypeDefinition[];
@@ -93,15 +98,6 @@ const contextualActionButtonStyle: React.CSSProperties = {
   alignItems: "center",
   gap: "8px",
 };
-
-function readFileAsDataURL(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("Errore lettura file"));
-    reader.readAsDataURL(file);
-  });
-}
 
 function handleEnterBlur(
   event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>
@@ -518,13 +514,62 @@ export default function EntityEditor({
 }: EntityEditorProps) {
   const [mode, setMode] = useState<EditorMode>("read");
   const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [imageModalOpen, setImageModalOpen] = useState(false);
+  const [resolvedImageSrc, setResolvedImageSrc] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const activeObjectUrlRef = useRef<string | null>(null);
 
   const accentColor = getTypeColor(selectedEntity.type, entityTypes);
   const typeLabel = getEntityTypeLabel(selectedEntity.type, entityTypes);
   const TypeIcon = getEntityTypeIcon(selectedEntity.type);
   const metadataFields = getMetadataFieldsForEntityType(selectedEntity.type, entityTypes);
   const metadata = selectedEntity.metadata ?? {};
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    void (async () => {
+      try {
+        const nextSrc = await resolveImageRefToSrc(selectedEntity.image);
+
+        if (isCancelled) {
+          if (nextSrc.startsWith("blob:")) {
+            URL.revokeObjectURL(nextSrc);
+          }
+          return;
+        }
+
+        if (activeObjectUrlRef.current && activeObjectUrlRef.current !== nextSrc) {
+          URL.revokeObjectURL(activeObjectUrlRef.current);
+          activeObjectUrlRef.current = null;
+        }
+
+        if (nextSrc.startsWith("blob:")) {
+          activeObjectUrlRef.current = nextSrc;
+        }
+
+        setResolvedImageSrc(nextSrc);
+      } catch (error) {
+        console.error("Impossibile caricare l'immagine", error);
+        if (!isCancelled) {
+          setResolvedImageSrc("");
+        }
+      }
+    })();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedEntity.image]);
+
+  useEffect(() => {
+    return () => {
+      if (activeObjectUrlRef.current) {
+        URL.revokeObjectURL(activeObjectUrlRef.current);
+        activeObjectUrlRef.current = null;
+      }
+    };
+  }, []);
 
   const entityMap = useMemo(
     () => new Map(entities.map((entity) => [entity.id, entity] as const)),
@@ -601,15 +646,34 @@ export default function EntityEditor({
     const file = event.target.files?.[0];
     if (!file) return;
 
+    const previousImageRef = selectedEntity.image;
+
     try {
       setIsUploadingImage(true);
-      const image = await readFileAsDataURL(file);
+      const image = await saveImageFileAsAssetRef(file);
       onUpdateEntity({ image });
-    } catch {
-      window.alert("Impossibile leggere l'immagine selezionata.");
+
+      if (previousImageRef && previousImageRef !== image) {
+        await deleteImageAssetByRef(previousImageRef);
+      }
+    } catch (error) {
+      console.error(error);
+      window.alert("Impossibile salvare l'immagine selezionata.");
     } finally {
       setIsUploadingImage(false);
       event.target.value = "";
+    }
+  }
+
+  async function handleRemoveImage() {
+    const previousImageRef = selectedEntity.image;
+    setImageModalOpen(false);
+    onUpdateEntity({ image: undefined });
+
+    try {
+      await deleteImageAssetByRef(previousImageRef);
+    } catch (error) {
+      console.error(error);
     }
   }
 
@@ -649,8 +713,8 @@ export default function EntityEditor({
           overflow: "hidden",
           border: `1px solid ${accentColor}33`,
           background:
-            selectedEntity.image
-              ? `linear-gradient(180deg, rgba(16,16,16,0.18) 0%, rgba(10,10,10,0.82) 100%), url(${selectedEntity.image}) center/cover`
+            resolvedImageSrc
+              ? `linear-gradient(180deg, rgba(16,16,16,0.18) 0%, rgba(10,10,10,0.82) 100%), url(${resolvedImageSrc}) center/cover`
               : "linear-gradient(135deg, rgba(57,49,33,0.92) 0%, rgba(26,31,24,0.92) 55%, rgba(12,15,18,0.96) 100%)",
         }}
       >
@@ -833,8 +897,8 @@ export default function EntityEditor({
                   <button type="button" style={primaryButtonStyle} onClick={() => fileInputRef.current?.click()}>
                     {isUploadingImage ? "Caricamento..." : "Carica immagine"}
                   </button>
-                  {selectedEntity.image ? (
-                    <button type="button" style={ghostButtonStyle} onClick={() => onUpdateEntity({ image: undefined })}>
+                  {resolvedImageSrc ? (
+                    <button type="button" style={ghostButtonStyle} onClick={() => { void handleRemoveImage(); }}>
                       Rimuovi immagine
                     </button>
                   ) : null}
@@ -1023,25 +1087,57 @@ export default function EntityEditor({
 
           <div>
             <div style={{ ...fieldLabelStyle, marginBottom: 10 }}>Immagine</div>
-            {selectedEntity.image ? (
+            {resolvedImageSrc ? (
               <div style={{ display: "grid", gap: 12 }}>
-                <img
-                  src={selectedEntity.image}
-                  alt={selectedEntity.name}
+                <button
+                  type="button"
+                  onClick={() => setImageModalOpen(true)}
                   style={{
+                    display: "block",
                     width: "100%",
-                    maxHeight: 320,
-                    objectFit: "cover",
-                    borderRadius: 18,
-                    border: "1px solid rgba(167,139,78,0.18)",
+                    padding: 0,
+                    background: "transparent",
+                    border: "none",
+                    cursor: "zoom-in",
                   }}
-                />
+                >
+                  <div
+                    style={{
+                      width: "100%",
+                      maxHeight: "70vh",
+                      borderRadius: 18,
+                      border: "1px solid rgba(167,139,78,0.18)",
+                      background: "rgba(0,0,0,0.25)",
+                      overflow: "hidden",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: 12,
+                    }}
+                  >
+                    <img
+                      src={resolvedImageSrc}
+                      alt={selectedEntity.name}
+                      style={{
+                        maxWidth: "100%",
+                        maxHeight: "calc(70vh - 24px)",
+                        width: "auto",
+                        height: "auto",
+                        display: "block",
+                        borderRadius: 12,
+                      }}
+                    />
+                  </div>
+                </button>
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button type="button" style={ghostButtonStyle} onClick={() => setImageModalOpen(true)}>
+                    Apri grande
+                  </button>
                   <button type="button" style={ghostButtonStyle} onClick={() => fileInputRef.current?.click()}>
                     <ImagePlus size={15} style={{ marginRight: 8 }} />
                     Sostituisci immagine
                   </button>
-                  <button type="button" style={ghostButtonStyle} onClick={() => onUpdateEntity({ image: undefined })}>
+                  <button type="button" style={ghostButtonStyle} onClick={() => { void handleRemoveImage(); }}>
                     Rimuovi immagine
                   </button>
                 </div>
@@ -1069,6 +1165,61 @@ export default function EntityEditor({
           </div>
         </div>
       </CollapsibleSection>
+      {imageModalOpen && resolvedImageSrc ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setImageModalOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 2000,
+            background: "rgba(3,6,10,0.88)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+          }}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              maxWidth: "96vw",
+              maxHeight: "92vh",
+              display: "grid",
+              gap: 12,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button type="button" onClick={() => setImageModalOpen(false)} style={ghostButtonStyle}>
+                Chiudi
+              </button>
+            </div>
+            <div
+              style={{
+                background: "rgba(12,16,22,0.92)",
+                border: "1px solid rgba(167,139,78,0.18)",
+                borderRadius: 20,
+                padding: 14,
+                boxShadow: "0 24px 60px rgba(0,0,0,0.45)",
+              }}
+            >
+              <img
+                src={resolvedImageSrc}
+                alt={selectedEntity.name}
+                style={{
+                  display: "block",
+                  maxWidth: "calc(96vw - 28px)",
+                  maxHeight: "calc(92vh - 90px)",
+                  width: "auto",
+                  height: "auto",
+                  borderRadius: 12,
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
