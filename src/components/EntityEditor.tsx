@@ -1,4 +1,13 @@
 import { useMemo, useRef, useState } from "react";
+import {
+  Camera,
+  ImagePlus,
+  Link2,
+  ScrollText,
+  Sparkles,
+  Tag,
+  Waypoints,
+} from "lucide-react";
 import { UI_TEXT } from "../config";
 import {
   cardStyle,
@@ -13,10 +22,10 @@ import {
 } from "../styles";
 import type {
   Entity,
-  EntityMetadata,
   EntityType,
   EntityTypeDefinition,
   MetadataFieldDefinition,
+  Relation,
 } from "../types";
 import {
   getEntityTypeLabel,
@@ -29,6 +38,7 @@ import { getEntityTypeIcon, uiIcons } from "../utils/icons";
 type EntityEditorProps = {
   entityTypes: EntityTypeDefinition[];
   entities: Entity[];
+  relations: Relation[];
   selectedEntity: Entity;
   newTag: string;
   onUpdateEntity: (patch: Partial<Entity>) => void;
@@ -44,6 +54,8 @@ type EntityEditorProps = {
   onRemoveTag: (tag: string) => void;
   onDuplicateEntity: () => void;
   onDeleteEntity: () => void;
+  onOpenEntity: (id: string) => void;
+  onCenterInGraph: () => void;
 };
 
 type EditorMode = "read" | "edit";
@@ -57,20 +69,20 @@ type CollapsibleSectionProps = {
   icon?: React.ReactNode;
 };
 
+type NarrativeRelationItem = {
+  relation: Relation;
+  direction: "outgoing" | "incoming";
+  otherEntity: Entity;
+  label: string;
+};
+
 const fieldLabelStyle: React.CSSProperties = {
   display: "block",
   marginBottom: "6px",
-  color: "#9ca3af",
-  fontSize: "14px",
-  fontWeight: 700,
-};
-
-const smallFieldLabelStyle: React.CSSProperties = {
-  display: "block",
-  marginBottom: "6px",
-  color: "#9ca3af",
+  color: "#b6c2d3",
   fontSize: "13px",
-  fontWeight: 700,
+  fontWeight: 800,
+  letterSpacing: "0.01em",
 };
 
 const contextualActionButtonStyle: React.CSSProperties = {
@@ -82,21 +94,14 @@ const contextualActionButtonStyle: React.CSSProperties = {
   gap: "8px",
 };
 
-const metadataPreviewLabelStyle: React.CSSProperties = {
-  fontSize: "12px",
-  color: "#9ca3af",
-  textTransform: "uppercase",
-  letterSpacing: "0.04em",
-  fontWeight: 800,
-};
-
-const metadataPreviewValueStyle: React.CSSProperties = {
-  fontSize: "14px",
-  color: "#f3f4f6",
-  lineHeight: 1.45,
-  fontWeight: 500,
-};
-
+function readFileAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Errore lettura file"));
+    reader.readAsDataURL(file);
+  });
+}
 
 function handleEnterBlur(
   event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>
@@ -120,10 +125,11 @@ function CollapsibleSection({
     <div
       style={{
         ...cardStyle,
-        padding: "0",
+        padding: 0,
         overflow: "hidden",
-        border: `1px solid ${open ? `${accentColor}44` : "rgba(148, 163, 184, 0.14)"}`,
-        transition: "border-color 160ms ease",
+        border: `1px solid ${open ? `${accentColor}55` : "rgba(167, 139, 78, 0.18)"}`,
+        background:
+          "linear-gradient(180deg, rgba(24,21,17,0.98) 0%, rgba(13,15,18,0.98) 100%)",
       }}
     >
       <button
@@ -137,11 +143,11 @@ function CollapsibleSection({
           gap: "12px",
           padding: "14px 16px",
           background: open
-            ? "linear-gradient(180deg, rgba(15,23,38,0.96) 0%, rgba(12,20,34,0.96) 100%)"
-            : "linear-gradient(180deg, rgba(19,29,46,0.9) 0%, rgba(15,23,38,0.9) 100%)",
+            ? "linear-gradient(180deg, rgba(40,31,20,0.86) 0%, rgba(24,21,17,0.98) 100%)"
+            : "linear-gradient(180deg, rgba(22,21,18,0.95) 0%, rgba(17,18,20,0.98) 100%)",
           border: "none",
           cursor: "pointer",
-          color: "#f3f4f6",
+          color: "#f7f2e8",
           textAlign: "left",
         }}
       >
@@ -153,11 +159,12 @@ function CollapsibleSection({
               borderRadius: "999px",
               backgroundColor: accentColor,
               flexShrink: 0,
+              boxShadow: `0 0 18px ${accentColor}55`,
             }}
           />
           <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
             {icon}
-            <span style={{ fontSize: "15px", fontWeight: 800, color: "#f9fafb" }}>
+            <span style={{ fontSize: "15px", fontWeight: 800, color: "#f7f2e8" }}>
               {title}
             </span>
           </div>
@@ -173,7 +180,7 @@ function CollapsibleSection({
         <div
           style={{
             padding: "16px",
-            borderTop: "1px solid rgba(148, 163, 184, 0.12)",
+            borderTop: "1px solid rgba(167, 139, 78, 0.14)",
             display: "grid",
             gap: "14px",
           }}
@@ -236,16 +243,6 @@ function ReferenceAutocompleteField({
       .slice(0, 8);
   }, [allowedTypes, entities, selectedEntity.id, value]);
 
-  const exactMatch = useMemo(() => {
-    const normalized = value.trim().toLowerCase();
-    if (!normalized) return undefined;
-    return filteredEntities.find(
-      (entity) => entity.name.trim().toLowerCase() === normalized
-    );
-  }, [filteredEntities, value]);
-
-  const allowedTypeLabels = allowedTypes.map((type) => getEntityTypeLabel(type, entityTypes));
-
   function commit(valueToCommit: string) {
     onChange(valueToCommit, { commitReference: true });
     setOpen(false);
@@ -300,15 +297,15 @@ function ReferenceAutocompleteField({
             right: 0,
             zIndex: 30,
             borderRadius: "14px",
-            border: "1px solid rgba(148,163,184,0.18)",
-            background: "rgba(6,12,22,0.98)",
+            border: "1px solid rgba(167,139,78,0.2)",
+            background: "rgba(9,10,12,0.98)",
             boxShadow: "0 18px 40px rgba(0,0,0,0.35)",
             overflow: "hidden",
           }}
         >
           <div style={{ maxHeight: "260px", overflowY: "auto", display: "grid" }}>
             {filteredEntities.length === 0 ? (
-              <div style={{ padding: "12px 14px", fontSize: "13px", color: "#9ca3af" }}>
+              <div style={{ padding: "12px 14px", fontSize: "13px", color: "#b6c2d3" }}>
                 Nessuna entità trovata.
               </div>
             ) : (
@@ -341,12 +338,12 @@ function ReferenceAutocompleteField({
                           flexShrink: 0,
                         }}
                       />
-                      <span style={{ fontSize: "13px", fontWeight: 800 }}>{entity.name}</span>
+                      <span style={{ fontWeight: 700 }}>{entity.name}</span>
                     </div>
-                    <div style={{ fontSize: "12px", color: "#9ca3af" }}>
+                    <span style={{ fontSize: "12px", color: "#94a3b8" }}>
                       {getEntityTypeLabel(entity.type, entityTypes)}
                       {entity.shortDescription ? ` · ${entity.shortDescription}` : ""}
-                    </div>
+                    </span>
                   </button>
                 );
               })
@@ -354,26 +351,159 @@ function ReferenceAutocompleteField({
           </div>
         </div>
       ) : null}
-
-      <div style={{ fontSize: "12px", color: "#9ca3af", lineHeight: 1.45 }}>
-        {allowedTypeLabels.length > 0
-          ? `Autocomplete su: ${allowedTypeLabels.join(", ")}.`
-          : "Autocomplete su tutte le entità."}{" "}
-        {exactMatch ? (
-          <span style={{ color: "#86efac" }}>Collegamento pronto: {exactMatch.name}</span>
-        ) : field.autoCreateTarget ? (
-          <span>Se non esiste, verrà creato al commit.</span>
-        ) : (
-          <span>Premi Invio o esci dal campo per sincronizzare la relazione.</span>
-        )}
-      </div>
     </div>
+  );
+}
+
+function renderMetadataInput(params: {
+  field: MetadataFieldDefinition;
+  value: string;
+  selectedEntity: Entity;
+  entities: Entity[];
+  entityTypes: EntityTypeDefinition[];
+  onChange: (value: string, options?: { commitReference?: boolean }) => void;
+}) {
+  const { field, value, selectedEntity, entities, entityTypes, onChange } = params;
+
+  if (field.kind === "textarea") {
+    return (
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={(e) => onChange(e.target.value)}
+        placeholder={field.placeholder}
+        rows={4}
+        style={textareaStyle}
+      />
+    );
+  }
+
+  if (field.kind === "entity-reference") {
+    return (
+      <ReferenceAutocompleteField
+        field={field}
+        value={value}
+        selectedEntity={selectedEntity}
+        entities={entities}
+        entityTypes={entityTypes}
+        onChange={onChange}
+      />
+    );
+  }
+
+  return (
+    <input
+      type="text"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={(e) => onChange(e.target.value)}
+      onKeyDown={handleEnterBlur}
+      placeholder={field.placeholder}
+      style={inputDarkStyle}
+    />
+  );
+}
+
+function MetadataReadCard({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div
+      style={{
+        padding: "14px 16px",
+        borderRadius: 16,
+        border: "1px solid rgba(167,139,78,0.14)",
+        background:
+          "linear-gradient(180deg, rgba(27,23,18,0.95) 0%, rgba(14,15,18,0.98) 100%)",
+        display: "grid",
+        gap: 6,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          textTransform: "uppercase",
+          letterSpacing: "0.08em",
+          color: "#b89c63",
+          fontWeight: 800,
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ color: "#f6efe2", lineHeight: 1.55, fontWeight: 600 }}>{value}</div>
+    </div>
+  );
+}
+
+function NarrativeRelationCard({
+  item,
+  onOpenEntity,
+  entityTypes,
+}: {
+  item: NarrativeRelationItem;
+  onOpenEntity: (id: string) => void;
+  entityTypes: EntityTypeDefinition[];
+}) {
+  const Icon = getEntityTypeIcon(item.otherEntity.type);
+  const accent = getTypeColor(item.otherEntity.type, entityTypes);
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpenEntity(item.otherEntity.id)}
+      style={{
+        width: "100%",
+        textAlign: "left",
+        padding: "14px 16px",
+        borderRadius: 16,
+        border: "1px solid rgba(167,139,78,0.16)",
+        background:
+          "linear-gradient(180deg, rgba(25,23,19,0.96) 0%, rgba(13,15,18,0.98) 100%)",
+        color: "#f8fafc",
+        display: "grid",
+        gap: 8,
+        cursor: "pointer",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 10,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: `${accent}22`,
+            color: accent,
+            border: `1px solid ${accent}33`,
+            flexShrink: 0,
+          }}
+        >
+          <Icon size={15} />
+        </span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ color: "#f7f2e8", fontWeight: 800, lineHeight: 1.4 }}>
+            {item.label} <span style={{ color: accent }}>{item.otherEntity.name}</span>
+          </div>
+          <div style={{ color: "#9fb0c7", fontSize: 12 }}>
+            {getEntityTypeLabel(item.otherEntity.type, entityTypes)}
+            {item.otherEntity.shortDescription ? ` · ${item.otherEntity.shortDescription}` : ""}
+          </div>
+        </div>
+      </div>
+    </button>
   );
 }
 
 export default function EntityEditor({
   entityTypes,
   entities,
+  relations,
   selectedEntity,
   newTag,
   onUpdateEntity,
@@ -383,306 +513,562 @@ export default function EntityEditor({
   onRemoveTag,
   onDuplicateEntity,
   onDeleteEntity,
+  onOpenEntity,
+  onCenterInGraph,
 }: EntityEditorProps) {
   const [mode, setMode] = useState<EditorMode>("read");
-  const [newMetaKey, setNewMetaKey] = useState("");
-  const [newMetaValue, setNewMetaValue] = useState("");
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const metadata = selectedEntity.metadata ?? {};
+  const accentColor = getTypeColor(selectedEntity.type, entityTypes);
+  const typeLabel = getEntityTypeLabel(selectedEntity.type, entityTypes);
+  const TypeIcon = getEntityTypeIcon(selectedEntity.type);
   const metadataFields = getMetadataFieldsForEntityType(selectedEntity.type, entityTypes);
-  const entityAccent = getTypeColor(selectedEntity.type, entityTypes);
-  const EntityIcon = getEntityTypeIcon(selectedEntity.type);
+  const metadata = selectedEntity.metadata ?? {};
 
-  const baseKeys = metadataFields.map((field) => field.key);
+  const entityMap = useMemo(
+    () => new Map(entities.map((entity) => [entity.id, entity] as const)),
+    [entities]
+  );
 
-  const visibleMetadataEntries = useMemo(() => {
+  const metadataPreview = useMemo(() => {
     return metadataFields
-      .map((field) => ({ key: field.key, label: field.label, value: metadata[field.key] ?? "" }))
-      .filter((entry) => entry.value.trim() !== "");
+      .map((field) => ({ field, value: metadata[field.key] ?? "" }))
+      .filter((item) => item.value.trim().length > 0);
   }, [metadata, metadataFields]);
 
-  const customMetadataEntries = useMemo(() => {
-    return Object.entries(metadata).filter(([key]) => !baseKeys.includes(key));
-  }, [metadata, baseKeys]);
+  const outgoingRelations = useMemo<NarrativeRelationItem[]>(() => {
+    const items: NarrativeRelationItem[] = [];
 
-  function updateMetadataField(key: string, value: string) {
-    const nextMetadata: EntityMetadata = {
-      ...metadata,
-      [key]: value,
-    };
-    onUpdateEntity({ metadata: nextMetadata });
-  }
+    relations
+      .filter((relation) => relation.fromEntityId === selectedEntity.id)
+      .forEach((relation) => {
+        const otherEntity = entityMap.get(relation.toEntityId);
+        if (!otherEntity) return;
 
-  function addCustomMetadataField() {
-    const key = newMetaKey.trim().replace(/\s+/g, " ");
-    const value = newMetaValue.trim();
-    if (!key) return;
-    if (metadata[key] !== undefined) {
-      alert("Questo campo esiste già.");
-      return;
+        items.push({
+          relation,
+          direction: "outgoing",
+          otherEntity,
+          label: relation.type,
+        });
+      });
+
+    return items.sort((a, b) => a.label.localeCompare(b.label, "it", { sensitivity: "base" }));
+  }, [entityMap, relations, selectedEntity.id]);
+
+  const incomingRelations = useMemo<NarrativeRelationItem[]>(() => {
+    const items: NarrativeRelationItem[] = [];
+
+    relations
+      .filter((relation) => relation.toEntityId === selectedEntity.id)
+      .forEach((relation) => {
+        const otherEntity = entityMap.get(relation.fromEntityId);
+        if (!otherEntity) return;
+
+        items.push({
+          relation,
+          direction: "incoming",
+          otherEntity,
+          label: relation.inverseType?.trim() || relation.type,
+        });
+      });
+
+    return items.sort((a, b) => a.label.localeCompare(b.label, "it", { sensitivity: "base" }));
+  }, [entityMap, relations, selectedEntity.id]);
+
+  const timelineEntries = useMemo(() => {
+    const entries: Array<{ label: string; value: string }> = [];
+    const anno = metadata.anno?.trim();
+    const epoca = metadata.epoca?.trim();
+    const ordine = metadata.ordineCronologico?.trim();
+    const stato = metadata.stato?.trim();
+
+    if (anno) entries.push({ label: "Anno", value: anno });
+    if (epoca) entries.push({ label: "Epoca", value: epoca });
+    if (ordine) entries.push({ label: "Ordine cronologico", value: ordine });
+    if (stato) entries.push({ label: "Stato temporale", value: stato });
+
+    if (entries.length === 0) {
+      entries.push({ label: "Creato", value: new Date(selectedEntity.createdAt).toLocaleString("it-IT") });
+      entries.push({ label: "Aggiornato", value: new Date(selectedEntity.updatedAt).toLocaleString("it-IT") });
     }
-    onUpdateEntity({ metadata: { ...metadata, [key]: value } });
-    setNewMetaKey("");
-    setNewMetaValue("");
-  }
 
-  function removeCustomMetadataField(key: string) {
-    const nextMetadata: EntityMetadata = { ...metadata };
-    delete nextMetadata[key];
-    onUpdateEntity({ metadata: nextMetadata });
+    return entries;
+  }, [metadata, selectedEntity.createdAt, selectedEntity.updatedAt]);
+
+  async function handleImageSelected(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setIsUploadingImage(true);
+      const image = await readFileAsDataURL(file);
+      onUpdateEntity({ image });
+    } catch {
+      window.alert("Impossibile leggere l'immagine selezionata.");
+    } finally {
+      setIsUploadingImage(false);
+      event.target.value = "";
+    }
   }
 
   function handleTypeChange(nextType: EntityType) {
+    if (nextType === selectedEntity.type) return;
+
     onUpdateEntity({
       type: nextType,
       metadata: remapMetadataForType(selectedEntity.metadata, nextType, entityTypes),
     });
   }
 
-
   return (
     <div
       style={{
         ...panelStyle,
-        border: `1px solid ${entityAccent}55`,
-        boxShadow: "0 14px 34px rgba(0,0,0,0.18)",
-        overflow: "hidden",
+        border: "1px solid rgba(167,139,78,0.18)",
+        background:
+          "radial-gradient(circle at top left, rgba(102,126,72,0.09), transparent 24%), linear-gradient(180deg, rgba(31,26,20,0.98) 0%, rgba(11,13,17,0.99) 100%)",
+        boxShadow: "0 20px 48px rgba(0,0,0,0.28)",
+        display: "grid",
+        gap: 18,
       }}
     >
-      <div style={{ height: "4px", background: entityAccent, margin: "-16px -16px 16px -16px" }} />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleImageSelected}
+        style={{ display: "none" }}
+      />
 
-      <div style={{ display: "grid", gap: "12px", marginBottom: "18px" }}>
+      <div
+        style={{
+          ...cardStyle,
+          padding: 0,
+          overflow: "hidden",
+          border: `1px solid ${accentColor}33`,
+          background:
+            selectedEntity.image
+              ? `linear-gradient(180deg, rgba(16,16,16,0.18) 0%, rgba(10,10,10,0.82) 100%), url(${selectedEntity.image}) center/cover`
+              : "linear-gradient(135deg, rgba(57,49,33,0.92) 0%, rgba(26,31,24,0.92) 55%, rgba(12,15,18,0.96) 100%)",
+        }}
+      >
         <div
           style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "8px",
-            width: "fit-content",
-            padding: "6px 10px",
-            borderRadius: "999px",
-            backgroundColor: `${entityAccent}22`,
-            border: `1px solid ${entityAccent}55`,
-            color: "#e5e7eb",
-            fontSize: "12px",
-            fontWeight: 700,
-            letterSpacing: "0.02em",
-            textTransform: "uppercase",
+            padding: "22px",
+            background:
+              "linear-gradient(180deg, rgba(9,10,12,0.18) 0%, rgba(9,10,12,0.78) 32%, rgba(9,10,12,0.96) 100%)",
+            display: "grid",
+            gap: 18,
           }}
         >
-          <EntityIcon size={14} color={entityAccent} />
-          {getEntityTypeLabel(selectedEntity.type, entityTypes)} → {selectedEntity.name || "Entità"}
-        </div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              gap: 16,
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ display: "flex", gap: 16, alignItems: "flex-start", minWidth: 0, flex: 1 }}>
+              <div
+                style={{
+                  width: 62,
+                  height: 62,
+                  borderRadius: 18,
+                  background: `${accentColor}22`,
+                  border: `1px solid ${accentColor}44`,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  color: accentColor,
+                  boxShadow: `0 16px 32px ${accentColor}22`,
+                  flexShrink: 0,
+                }}
+              >
+                <TypeIcon size={28} />
+              </div>
 
-        <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start", flexWrap: "wrap" }}>
-          <div>
-            <h2 style={{ marginBottom: "6px" }}>{selectedEntity.name || "Entità"}</h2>
-            <div style={{ color: "#9ca3af", fontSize: "14px", maxWidth: "720px" }}>
-              {selectedEntity.shortDescription || UI_TEXT.emptyShortDescription}
+              <div style={{ minWidth: 0, flex: 1, display: "grid", gap: 8 }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "6px 10px",
+                      borderRadius: 999,
+                      background: `${accentColor}20`,
+                      color: accentColor,
+                      border: `1px solid ${accentColor}33`,
+                      fontSize: 12,
+                      fontWeight: 800,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.06em",
+                    }}
+                  >
+                    {typeLabel}
+                  </span>
+                  <span style={{ color: "#cbb58a", fontSize: 12, fontWeight: 700 }}>
+                    Ultima modifica · {new Date(selectedEntity.updatedAt).toLocaleString("it-IT")}
+                  </span>
+                </div>
+
+                {mode === "edit" ? (
+                  <input
+                    value={selectedEntity.name}
+                    onChange={(e) => onUpdateEntity({ name: e.target.value })}
+                    onBlur={(e) => onUpdateEntity({ name: e.target.value })}
+                    style={{
+                      ...inputStyle,
+                      fontSize: 28,
+                      fontWeight: 800,
+                      padding: "10px 14px",
+                    }}
+                  />
+                ) : (
+                  <h2
+                    style={{
+                      margin: 0,
+                      fontSize: 30,
+                      lineHeight: 1.1,
+                      color: "#f7f2e8",
+                      textShadow: "0 6px 24px rgba(0,0,0,0.3)",
+                    }}
+                  >
+                    {selectedEntity.name}
+                  </h2>
+                )}
+
+                {mode === "edit" ? (
+                  <textarea
+                    value={selectedEntity.shortDescription}
+                    onChange={(e) => onUpdateEntity({ shortDescription: e.target.value })}
+                    onBlur={(e) => onUpdateEntity({ shortDescription: e.target.value })}
+                    rows={2}
+                    style={{ ...textareaStyle, minHeight: 72 }}
+                    placeholder="Descrizione breve o pitch dell'entità"
+                  />
+                ) : selectedEntity.shortDescription ? (
+                  <p style={{ margin: 0, color: "#e3d6bf", fontSize: 15, lineHeight: 1.65, maxWidth: 900 }}>
+                    {selectedEntity.shortDescription}
+                  </p>
+                ) : null}
+
+                {selectedEntity.tags.length > 0 ? (
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {selectedEntity.tags.map((tag) => (
+                      <span
+                        key={tag}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "7px 10px",
+                          borderRadius: 999,
+                          border: "1px solid rgba(203,181,138,0.22)",
+                          background: "rgba(30,27,23,0.72)",
+                          color: "#f3e9d4",
+                          fontSize: 12,
+                          fontWeight: 700,
+                        }}
+                      >
+                        <Tag size={12} />
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "flex-end" }}>
+              <button type="button" onClick={() => setMode(mode === "read" ? "edit" : "read")} style={contextualActionButtonStyle}>
+                <uiIcons.edit size={15} />
+                {mode === "read" ? "Modifica" : "Chiudi modifica"}
+              </button>
+              <button type="button" onClick={onCenterInGraph} style={contextualActionButtonStyle}>
+                <Waypoints size={15} />
+                Centra nel grafo
+              </button>
+              <button type="button" onClick={onDuplicateEntity} style={contextualActionButtonStyle}>
+                <uiIcons.duplicate size={15} />
+                Duplica
+              </button>
+              <button type="button" onClick={onDeleteEntity} style={{ ...dangerButtonStyle, padding: "10px 12px", fontSize: 13, display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <uiIcons.delete size={15} />
+                Elimina
+              </button>
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={() => setMode((current) => (current === "read" ? "edit" : "read"))}
-              style={{ ...contextualActionButtonStyle, border: `1px solid ${entityAccent}44`, background: `${entityAccent}18` }}
+          {mode === "edit" ? (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1.2fr) minmax(220px, 0.8fr)",
+                gap: 14,
+              }}
             >
-              <uiIcons.edit size={14} />
-              {mode === "read" ? "Modifica" : "Anteprima"}
-            </button>
-
-            <button type="button" onClick={onDuplicateEntity} style={contextualActionButtonStyle}>
-              <uiIcons.duplicate size={14} />
-              Duplica
-            </button>
-
-            <button
-              type="button"
-              onClick={onDeleteEntity}
-              style={{ ...dangerButtonStyle, display: "inline-flex", alignItems: "center", gap: "8px", padding: "10px 12px" }}
-            >
-              <uiIcons.delete size={14} />
-              Elimina
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div style={{ display: "grid", gap: "14px" }}>
-        <CollapsibleSection
-          title="Dettagli base"
-          accentColor={entityAccent}
-          defaultOpen
-          icon={<uiIcons.edit size={15} />}
-          rightSlot={<span style={{ fontSize: "11px", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.04em", color: "#cbd5e1" }}>{mode === "read" ? "Anteprima" : "Modifica"}</span>}
-        >
-          {mode === "read" ? (
-            <div style={{ display: "grid", gap: "14px" }}>
-              <div style={{ display: "grid", gap: "6px" }}>
-                <div style={metadataPreviewLabelStyle}>Nome</div>
-                <div style={metadataPreviewValueStyle}>{selectedEntity.name || "—"}</div>
-              </div>
-              <div style={{ display: "grid", gap: "6px" }}>
-                <div style={metadataPreviewLabelStyle}>Tipo</div>
-                <div style={metadataPreviewValueStyle}>{getEntityTypeLabel(selectedEntity.type, entityTypes)}</div>
-              </div>
-              <div style={{ display: "grid", gap: "6px" }}>
-                <div style={metadataPreviewLabelStyle}>Descrizione breve</div>
-                <div style={metadataPreviewValueStyle}>{selectedEntity.shortDescription || UI_TEXT.emptyShortDescription}</div>
-              </div>
-            </div>
-          ) : (
-            <div style={{ display: "grid", gap: "14px" }}>
-              <div>
-                <label style={fieldLabelStyle}>Nome</label>
-                <input type="text" value={selectedEntity.name} onChange={(e) => onUpdateEntity({ name: e.target.value })} onKeyDown={handleEnterBlur} style={inputStyle} />
-              </div>
               <div>
                 <label style={fieldLabelStyle}>Tipo</label>
-                <select value={selectedEntity.type} onChange={(e) => handleTypeChange(e.target.value as EntityType)} style={inputStyle}>
+                <select
+                  value={selectedEntity.type}
+                  onChange={(e) => handleTypeChange(e.target.value)}
+                  style={inputStyle}
+                >
                   {entityTypes.map((type) => (
-                    <option key={type.id} value={type.id}>{type.label}</option>
+                    <option key={type.id} value={type.id}>
+                      {type.label}
+                    </option>
                   ))}
                 </select>
               </div>
+
               <div>
-                <label style={fieldLabelStyle}>Descrizione breve</label>
-                <textarea value={selectedEntity.shortDescription} onChange={(e) => onUpdateEntity({ shortDescription: e.target.value })} style={textareaStyle} />
-              </div>
-            </div>
-          )}
-        </CollapsibleSection>
-
-        <CollapsibleSection title="Metadata" accentColor={entityAccent} defaultOpen icon={<uiIcons.archive size={15} />} rightSlot={<span style={{ fontSize: "11px", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.04em", color: "#cbd5e1" }}>{metadataFields.length + customMetadataEntries.length} campi</span>}>
-          {mode === "read" ? (
-            visibleMetadataEntries.length === 0 && customMetadataEntries.length === 0 ? (
-              <div style={{ color: "#9ca3af", fontSize: "14px" }}>Nessun metadata compilato.</div>
-            ) : (
-              <div style={{ display: "grid", gap: "12px" }}>
-                {visibleMetadataEntries.map((entry) => (
-                  <div key={entry.key} style={{ ...cardStyle, display: "grid", gap: "6px" }}>
-                    <div style={metadataPreviewLabelStyle}>{entry.label}</div>
-                    <div style={metadataPreviewValueStyle}>{entry.value}</div>
-                  </div>
-                ))}
-                {customMetadataEntries.map(([key, customValue]) => (
-                  <div key={key} style={{ ...cardStyle, display: "grid", gap: "6px", border: "1px solid rgba(96,165,250,0.16)" }}>
-                    <div style={metadataPreviewLabelStyle}>{key}</div>
-                    <div style={metadataPreviewValueStyle}>{customValue || "—"}</div>
-                  </div>
-                ))}
-              </div>
-            )
-          ) : (
-            <div style={{ display: "grid", gap: "14px" }}>
-              {metadataFields.length > 0 ? (
-                <div style={{ display: "grid", gap: "12px" }}>
-                  <div style={{ fontSize: "12px", fontWeight: 800, textTransform: "uppercase", color: "#9ca3af", letterSpacing: "0.04em" }}>
-                    Campi base
-                  </div>
-
-                  {metadataFields.map((field) => {
-                    const value = metadata[field.key] ?? "";
-                    return (
-                      <div key={field.key}>
-                        <label style={smallFieldLabelStyle}>{field.label}</label>
-                        {field.kind === "textarea" ? (
-                          <textarea
-                            value={value}
-                            onChange={(e) => onUpdateMetadataField(field.key, e.target.value)}
-                            placeholder={field.placeholder}
-                            style={textareaStyle}
-                          />
-                        ) : field.kind === "entity-reference" ? (
-                          <ReferenceAutocompleteField
-                            field={field}
-                            value={value}
-                            selectedEntity={selectedEntity}
-                            entities={entities}
-                            entityTypes={entityTypes}
-                            onChange={(nextValue, options) => onUpdateMetadataField(field.key, nextValue, options)}
-                          />
-                        ) : (
-                          <input
-                            type="text"
-                            value={value}
-                            onChange={(e) => onUpdateMetadataField(field.key, e.target.value)}
-                            onBlur={() => onUpdateMetadataField(field.key, value, { commitReference: true })}
-                            onKeyDown={handleEnterBlur}
-                            placeholder={field.placeholder}
-                            style={inputDarkStyle}
-                          />
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div style={{ fontSize: "13px", color: "#9ca3af", lineHeight: 1.5 }}>
-                  Questo tipo non ha campi base predefiniti. Puoi usare liberamente i campi personalizzati qui sotto.
-                </div>
-              )}
-
-              <div style={{ display: "grid", gap: "12px", paddingTop: "4px" }}>
-                <div style={{ fontSize: "12px", fontWeight: 800, textTransform: "uppercase", color: "#9ca3af", letterSpacing: "0.04em" }}>
-                  Campi personalizzati
-                </div>
-
-                {customMetadataEntries.length === 0 ? (
-                  <div style={{ color: "#9ca3af", fontSize: "13px" }}>Nessun campo personalizzato</div>
-                ) : (
-                  <div style={{ display: "grid", gap: "10px" }}>
-                    {customMetadataEntries.map(([key, customValue]) => (
-                      <div key={key} style={{ display: "grid", gridTemplateColumns: "minmax(140px, 180px) minmax(0, 1fr) auto", gap: "8px", alignItems: "center" }}>
-                        <input value={key} disabled style={{ ...inputDarkStyle, opacity: 0.72, cursor: "default" }} />
-                        <input type="text" value={customValue} onChange={(e) => updateMetadataField(key, e.target.value)} onKeyDown={handleEnterBlur} style={inputDarkStyle} />
-                        <button type="button" onClick={() => removeCustomMetadataField(key)} style={{ ...dangerButtonStyle, display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: "42px", height: "42px", padding: 0 }}>
-                          <uiIcons.delete size={14} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div style={{ ...cardStyle, display: "grid", gap: "10px", border: "1px dashed rgba(148,163,184,0.18)" }}>
-                  <div style={{ fontSize: "13px", fontWeight: 700, color: "#d1d5db" }}>Aggiungi nuovo campo personalizzato</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 180px) minmax(0, 1fr) auto", gap: "8px", alignItems: "center" }}>
-                    <input type="text" placeholder="Nome campo" value={newMetaKey} onChange={(e) => setNewMetaKey(e.target.value)} style={inputDarkStyle} />
-                    <input type="text" placeholder="Valore" value={newMetaValue} onChange={(e) => setNewMetaValue(e.target.value)} style={inputDarkStyle} />
-                    <button type="button" onClick={addCustomMetadataField} style={{ ...primaryButtonStyle, display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: "42px", height: "42px", padding: 0 }}>
-                      +
+                <label style={fieldLabelStyle}>Immagine / cover</label>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button type="button" style={primaryButtonStyle} onClick={() => fileInputRef.current?.click()}>
+                    {isUploadingImage ? "Caricamento..." : "Carica immagine"}
+                  </button>
+                  {selectedEntity.image ? (
+                    <button type="button" style={ghostButtonStyle} onClick={() => onUpdateEntity({ image: undefined })}>
+                      Rimuovi immagine
                     </button>
-                  </div>
+                  ) : null}
                 </div>
               </div>
             </div>
-          )}
-        </CollapsibleSection>
+          ) : null}
+        </div>
+      </div>
 
-        <CollapsibleSection title="Tag" accentColor={entityAccent} defaultOpen icon={<uiIcons.tags size={15} />} rightSlot={<span style={{ fontSize: "11px", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.04em", color: "#cbd5e1" }}>{selectedEntity.tags.length}</span>}>
-          <div style={{ display: "grid", gap: "12px" }}>
-            <div style={{ display: "flex", gap: "10px" }}>
-              <input type="text" value={newTag} onChange={(e) => onNewTagChange(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onAddTag(); } }} placeholder={UI_TEXT.newTagPlaceholder} style={inputDarkStyle} />
-              <button type="button" onClick={onAddTag} style={{ ...primaryButtonStyle, display: "inline-flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
-                <uiIcons.tags size={14} />
-                Aggiungi
+      <CollapsibleSection
+        title="Descrizione"
+        accentColor={accentColor}
+        icon={<ScrollText size={16} color={accentColor} />}
+      >
+        {mode === "edit" ? (
+          <textarea
+            value={selectedEntity.notes}
+            onChange={(e) => onUpdateEntity({ notes: e.target.value })}
+            onBlur={(e) => onUpdateEntity({ notes: e.target.value })}
+            placeholder="Note estese, dettagli di lore, scene, storia, appunti sparsi..."
+            rows={8}
+            style={textareaStyle}
+          />
+        ) : (
+          <div
+            style={{
+              color: selectedEntity.notes ? "#e7dcc8" : "#9fb0c7",
+              lineHeight: 1.8,
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {selectedEntity.notes || "Nessuna nota disponibile."}
+          </div>
+        )}
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Metadati custom"
+        accentColor={accentColor}
+        icon={<Sparkles size={16} color={accentColor} />}
+        rightSlot={
+          <span style={{ color: "#b89c63", fontSize: 12, fontWeight: 700 }}>
+            {metadataPreview.length} compilati
+          </span>
+        }
+      >
+        {metadataFields.length === 0 ? (
+          <div style={{ color: "#9fb0c7" }}>Questo tipo di entità non ha ancora campi custom.</div>
+        ) : mode === "edit" ? (
+          <div style={{ display: "grid", gap: 14 }}>
+            {metadataFields.map((field) => (
+              <div key={field.key} style={{ display: "grid", gap: 8 }}>
+                <label style={fieldLabelStyle}>{field.label}</label>
+                {renderMetadataInput({
+                  field,
+                  value: metadata[field.key] ?? "",
+                  selectedEntity,
+                  entities,
+                  entityTypes,
+                  onChange: (value, options) => onUpdateMetadataField(field.key, value, options),
+                })}
+              </div>
+            ))}
+          </div>
+        ) : metadataPreview.length > 0 ? (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: 12,
+            }}
+          >
+            {metadataPreview.map(({ field, value }) => (
+              <MetadataReadCard key={field.key} label={field.label} value={value} />
+            ))}
+          </div>
+        ) : (
+          <div style={{ color: "#9fb0c7" }}>Nessun metadato compilato.</div>
+        )}
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Relazioni in uscita"
+        accentColor={accentColor}
+        icon={<Link2 size={16} color={accentColor} />}
+      >
+        {outgoingRelations.length > 0 ? (
+          <div style={{ display: "grid", gap: 10 }}>
+            {outgoingRelations.map((item) => (
+              <NarrativeRelationCard
+                key={item.relation.id}
+                item={item}
+                onOpenEntity={onOpenEntity}
+                entityTypes={entityTypes}
+              />
+            ))}
+          </div>
+        ) : (
+          <div style={{ color: "#9fb0c7" }}>Nessuna relazione in uscita.</div>
+        )}
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Relazioni in entrata"
+        accentColor={accentColor}
+        icon={<uiIcons.relations size={16} color={accentColor} />}
+      >
+        {incomingRelations.length > 0 ? (
+          <div style={{ display: "grid", gap: 10 }}>
+            {incomingRelations.map((item) => (
+              <NarrativeRelationCard
+                key={item.relation.id}
+                item={item}
+                onOpenEntity={onOpenEntity}
+                entityTypes={entityTypes}
+              />
+            ))}
+          </div>
+        ) : (
+          <div style={{ color: "#9fb0c7" }}>Nessuna relazione in entrata.</div>
+        )}
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Timeline / cronologia"
+        accentColor={accentColor}
+        icon={<uiIcons.timeline size={16} color={accentColor} />}
+      >
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: 12,
+          }}
+        >
+          {timelineEntries.map((entry) => (
+            <MetadataReadCard key={entry.label} label={entry.label} value={entry.value} />
+          ))}
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Tag e immagini"
+        accentColor={accentColor}
+        icon={<Camera size={16} color={accentColor} />}
+      >
+        <div style={{ display: "grid", gap: 16 }}>
+          <div>
+            <div style={{ ...fieldLabelStyle, marginBottom: 10 }}>Tag</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+              {selectedEntity.tags.length > 0 ? (
+                selectedEntity.tags.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => onRemoveTag(tag)}
+                    style={removableTagStyle()}
+                  >
+                    {tag} ×
+                  </button>
+                ))
+              ) : (
+                <div style={{ color: "#9fb0c7" }}>Nessun tag assegnato.</div>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <input
+                type="text"
+                value={newTag}
+                onChange={(e) => onNewTagChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    onAddTag();
+                  }
+                }}
+                placeholder={UI_TEXT.newTagPlaceholder}
+                style={{ ...inputDarkStyle, minWidth: 220, flex: "1 1 240px" }}
+              />
+              <button type="button" onClick={onAddTag} style={primaryButtonStyle}>
+                Aggiungi tag
               </button>
             </div>
-            {selectedEntity.tags.length === 0 ? (
-              <div style={{ color: "#9ca3af", fontSize: "14px" }}>Nessun tag assegnato.</div>
-            ) : (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                {selectedEntity.tags.map((tag) => (
-                  <button key={tag} type="button" onClick={() => onRemoveTag(tag)} style={{ ...removableTagStyle(), display: "inline-flex", alignItems: "center", gap: "6px" }}>
-                    <uiIcons.tags size={12} />
-                    {tag}
+          </div>
+
+          <div>
+            <div style={{ ...fieldLabelStyle, marginBottom: 10 }}>Immagine</div>
+            {selectedEntity.image ? (
+              <div style={{ display: "grid", gap: 12 }}>
+                <img
+                  src={selectedEntity.image}
+                  alt={selectedEntity.name}
+                  style={{
+                    width: "100%",
+                    maxHeight: 320,
+                    objectFit: "cover",
+                    borderRadius: 18,
+                    border: "1px solid rgba(167,139,78,0.18)",
+                  }}
+                />
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button type="button" style={ghostButtonStyle} onClick={() => fileInputRef.current?.click()}>
+                    <ImagePlus size={15} style={{ marginRight: 8 }} />
+                    Sostituisci immagine
                   </button>
-                ))}
+                  <button type="button" style={ghostButtonStyle} onClick={() => onUpdateEntity({ image: undefined })}>
+                    Rimuovi immagine
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div
+                style={{
+                  padding: "18px",
+                  borderRadius: 18,
+                  border: "1px dashed rgba(167,139,78,0.28)",
+                  background: "rgba(28,24,20,0.65)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  flexWrap: "wrap",
+                }}
+              >
+                <div style={{ color: "#d7c9ad" }}>Aggiungi una cover o un riferimento visivo.</div>
+                <button type="button" style={primaryButtonStyle} onClick={() => fileInputRef.current?.click()}>
+                  {isUploadingImage ? "Caricamento..." : "Carica immagine"}
+                </button>
               </div>
             )}
           </div>
-        </CollapsibleSection>
-      </div>
+        </div>
+      </CollapsibleSection>
     </div>
   );
 }

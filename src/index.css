@@ -8,12 +8,19 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  --bg-0: #09101b;
-  --bg-1: #0b1220;
-  --text-0: #f3f7ff;
-  --text-1: #c7d2e3;
-  --text-2: #93a0b4;
-  --border-soft: rgba(148, 163, 184, 0.14);
+
+  --bg-0: #0d0f12;
+  --bg-1: #14171b;
+  --bg-2: #1e1a16;
+  --parchment-dark: #2c241b;
+  --forest-glow: rgba(108, 132, 82, 0.18);
+  --brass-glow: rgba(199, 178, 124, 0.16);
+
+  --text-0: #f6efe2;
+  --text-1: #d7c9ad;
+  --text-2: #aab7c8;
+  --border-soft: rgba(170, 141, 87, 0.14);
+  --focus: rgba(199, 178, 124, 0.35);
 }
 
 html,
@@ -30,7 +37,8 @@ html {
 
 body {
   background:
-    radial-gradient(circle at top, rgba(59, 130, 246, 0.08), transparent 22%),
+    radial-gradient(circle at top left, var(--forest-glow), transparent 24%),
+    radial-gradient(circle at top right, var(--brass-glow), transparent 20%),
     linear-gradient(180deg, var(--bg-0) 0%, var(--bg-1) 100%);
   color: var(--text-0);
 }
@@ -63,27 +71,34 @@ button:active {
   transform: translateY(0);
 }
 
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus);
+}
+
 input::placeholder,
 textarea::placeholder {
   color: var(--text-2);
 }
 
-/* FIX SELECT / OPTION */
 select {
   color: var(--text-0);
-  background-color: #0f1726;
+  background-color: #16191d;
 }
 
 select option {
-  color: #0f172a;
-  background-color: #ffffff;
+  color: #1a1a1a;
+  background-color: #f6efe2;
 }
 
 select option:checked,
 select option:hover,
 select option:focus {
-  color: #0f172a;
-  background-color: #dbeafe;
+  color: #1a1a1a;
+  background-color: #ead9ae;
 }
 
 h1,
@@ -126,17 +141,17 @@ textarea {
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(15, 23, 38, 0.75);
+  background: rgba(20, 20, 20, 0.82);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(100, 116, 139, 0.45);
+  background: rgba(170, 141, 87, 0.36);
   border-radius: 999px;
-  border: 2px solid rgba(15, 23, 38, 0.75);
+  border: 2px solid rgba(20, 20, 20, 0.82);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.55);
+  background: rgba(199, 178, 124, 0.52);
 }
 
 .react-flow__attribution {

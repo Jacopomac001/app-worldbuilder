@@ -364,56 +364,30 @@ function sanitizeEntityTypes(
 ): EntityTypeDefinition[] {
   const fromStorage = Array.isArray(rawEntityTypes)
     ? rawEntityTypes
-        .map((item): EntityTypeDefinition | null => {
-          if (!item || typeof item !== "object") return null;
-
-          const rawItem = item as {
-            id?: unknown;
-            label?: unknown;
-            color?: unknown;
-            builtIn?: unknown;
-            fields?: unknown;
-          };
-
+        .map((item) => {
           const id =
-            typeof rawItem.id === "string" ? slugifyEntityTypeId(rawItem.id) : "";
+            typeof item?.id === "string" ? slugifyEntityTypeId(item.id) : "";
           const label =
-            typeof rawItem.label === "string" ? rawItem.label.trim() : "";
+            typeof item?.label === "string" ? item.label.trim() : "";
           const color =
-            typeof rawItem.color === "string" && rawItem.color.trim()
-              ? rawItem.color.trim()
+            typeof item?.color === "string" && item.color.trim()
+              ? item.color.trim()
               : "#64748b";
 
           if (!id || !label) return null;
 
-          const fields: MetadataFieldDefinition[] | undefined = Array.isArray(
-            rawItem.fields
-          )
-            ? rawItem.fields
-                .map((field): MetadataFieldDefinition | null => {
+          const fields = Array.isArray(item?.fields)
+            ? item.fields
+                .map((field: unknown): MetadataFieldDefinition | null => {
                   if (!field || typeof field !== "object") return null;
 
-                  const rawField = field as {
-                    key?: unknown;
-                    label?: unknown;
-                    kind?: unknown;
-                    placeholder?: unknown;
-                    required?: unknown;
-                    allowedEntityTypes?: unknown;
-                    relationType?: unknown;
-                    relationInverseType?: unknown;
-                    autoCreateTarget?: unknown;
-                    autoCreateTargetType?: unknown;
-                  };
-
-                  const key =
-                    typeof rawField.key === "string" ? rawField.key.trim() : "";
+                  const safeField = field as Partial<MetadataFieldDefinition>;
+                  const key = typeof safeField.key === "string" ? safeField.key.trim() : "";
                   const fieldLabel =
-                    typeof rawField.label === "string" ? rawField.label.trim() : "";
+                    typeof safeField.label === "string" ? safeField.label.trim() : "";
                   const kind =
-                    rawField.kind === "textarea" ||
-                    rawField.kind === "entity-reference"
-                      ? rawField.kind
+                    safeField.kind === "textarea" || safeField.kind === "entity-reference"
+                      ? safeField.kind
                       : "text";
 
                   if (!key || !fieldLabel) return null;
@@ -423,53 +397,49 @@ function sanitizeEntityTypes(
                     label: fieldLabel,
                     kind,
                     placeholder:
-                      typeof rawField.placeholder === "string"
-                        ? rawField.placeholder
+                      typeof safeField.placeholder === "string"
+                        ? safeField.placeholder
                         : undefined,
                     required:
-                      typeof rawField.required === "boolean"
-                        ? rawField.required
+                      typeof safeField.required === "boolean"
+                        ? safeField.required
                         : undefined,
-                    allowedEntityTypes: Array.isArray(rawField.allowedEntityTypes)
-                      ? rawField.allowedEntityTypes.filter(
-                          (type): type is string => typeof type === "string"
+                    allowedEntityTypes: Array.isArray(safeField.allowedEntityTypes)
+                      ? safeField.allowedEntityTypes.filter(
+                          (type: unknown): type is string => typeof type === "string"
                         )
                       : undefined,
                     relationType:
-                      typeof rawField.relationType === "string"
-                        ? rawField.relationType
+                      typeof safeField.relationType === "string"
+                        ? safeField.relationType
                         : undefined,
                     relationInverseType:
-                      typeof rawField.relationInverseType === "string"
-                        ? rawField.relationInverseType
+                      typeof safeField.relationInverseType === "string"
+                        ? safeField.relationInverseType
                         : undefined,
                     autoCreateTarget:
-                      typeof rawField.autoCreateTarget === "boolean"
-                        ? rawField.autoCreateTarget
+                      typeof safeField.autoCreateTarget === "boolean"
+                        ? safeField.autoCreateTarget
                         : undefined,
                     autoCreateTargetType:
-                      typeof rawField.autoCreateTargetType === "string"
-                        ? rawField.autoCreateTargetType
+                      typeof safeField.autoCreateTargetType === "string"
+                        ? safeField.autoCreateTargetType
                         : undefined,
                   };
                 })
-                .filter(
-                  (field): field is MetadataFieldDefinition => field !== null
-                )
+                .filter((field: MetadataFieldDefinition | null): field is MetadataFieldDefinition => field !== null)
             : undefined;
 
-          return {
-            id,
-            label,
-            color,
-            builtIn:
-              (typeof rawItem.builtIn === "boolean" && rawItem.builtIn) ||
-              isBuiltInEntityType(id),
-            fields,
-          };
-        })
-        .filter((item): item is EntityTypeDefinition => item !== null)
-    : [];
+        return {
+  id,
+  label,
+  color,
+  builtIn: Boolean(item?.builtIn) || isBuiltInEntityType(id),
+  fields,
+} as EntityTypeDefinition;
+})
+.filter((item): item is EntityTypeDefinition => item !== null)
+: [];
 
   const map = new Map<string, EntityTypeDefinition>();
 
@@ -2120,8 +2090,10 @@ export default function App() {
     >
       <div style={pageContainerStyle}>
         <WorldDashboard
+          entityTypes={entityTypes}
           entities={entities}
           relations={relations}
+          selectedEntityId={selectedId}
           onOpenEntity={(id) => {
             setSelectedId(id);
             setView("workspace");
@@ -2332,6 +2304,7 @@ export default function App() {
               <EntityEditor
                 entityTypes={entityTypes}
                 entities={entities}
+                relations={selectedEntityRelations}
                 selectedEntity={selectedEntity}
                 newTag={newTag}
                 onUpdateEntity={updateSelectedEntity}
@@ -2341,6 +2314,11 @@ export default function App() {
                 onRemoveTag={removeTag}
                 onDuplicateEntity={duplicateSelectedEntity}
                 onDeleteEntity={deleteSelectedEntity}
+                onOpenEntity={(id) => {
+                  setSelectedId(id);
+                  setNewTag("");
+                }}
+                onCenterInGraph={() => setView("graph")}
               />
 
               <div
