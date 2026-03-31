@@ -29,12 +29,17 @@ export const BUILT_IN_ENTITY_TYPES: EntityTypeDefinition[] = [
 export const metadataFieldsByType: Partial<Record<EntityType, MetadataFieldDefinition[]>> = {
   luogo: [
     { key: "regione", label: "Regione", kind: "text", placeholder: "Es. Costa orientale" },
+    { key: "siTrovaIn", label: "Si trova in", kind: "entity-reference", placeholder: "Es. Ducato del Nord", allowedEntityTypes: ["luogo"], relationType: "si trova in", relationInverseType: "contiene" },
     { key: "clima", label: "Clima", kind: "text", placeholder: "Es. Tropicale umido" },
     { key: "popolazione", label: "Popolazione", kind: "text", placeholder: "Es. 12.000 abitanti" },
     { key: "pericolo", label: "Livello di pericolo", kind: "text", placeholder: "Es. Alto" },
   ],
   personaggio: [
     { key: "ruolo", label: "Ruolo", kind: "text", placeholder: "Es. Esploratore" },
+    { key: "razza", label: "Razza", kind: "text", placeholder: "Es. Elfo dei boschi" },
+    { key: "padre", label: "Padre", kind: "entity-reference", placeholder: "Es. Armand", allowedEntityTypes: ["personaggio"], relationType: "figlio di", relationInverseType: "ha come figlio" },
+    { key: "madre", label: "Madre", kind: "entity-reference", placeholder: "Es. Lyra", allowedEntityTypes: ["personaggio"], relationType: "figlio di", relationInverseType: "ha come figlio" },
+    { key: "coniuge", label: "Coniuge / partner", kind: "entity-reference", placeholder: "Es. Elira", allowedEntityTypes: ["personaggio"], relationType: "coniuge di", relationInverseType: "coniuge di" },
     { key: "fazione", label: "Fazione", kind: "entity-reference", placeholder: "Es. Guardia d'Ambra", allowedEntityTypes: ["fazione"], relationType: "membro di", relationInverseType: "include" },
     { key: "status", label: "Status", kind: "text", placeholder: "Es. Vivo / disperso" },
   ],
@@ -64,7 +69,10 @@ export const RELATION_PRESETS: readonly RelationPreset[] = [
   { type: "nemico di", inverseType: "nemico di" },
   { type: "controlla", inverseType: "è controllato da" },
   { type: "vive in", inverseType: "ospita" },
+  { type: "abita in", inverseType: "ospita" },
   { type: "si trova in", inverseType: "contiene" },
+  { type: "figlio di", inverseType: "ha come figlio" },
+  { type: "coniuge di", inverseType: "coniuge di" },
   { type: "possiede", inverseType: "appartiene a" },
   { type: "ha causato", inverseType: "è stato causato da" },
   { type: "ha distrutto", inverseType: "è stato distrutto da" },

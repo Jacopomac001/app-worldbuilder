@@ -4,6 +4,7 @@ import {
   ImagePlus,
   Link2,
   ScrollText,
+  Shield,
   Sparkles,
   Tag,
   Waypoints,
@@ -21,6 +22,7 @@ import {
   textareaStyle,
 } from "../styles";
 import type {
+  DndStats,
   Entity,
   EntityType,
   EntityTypeDefinition,
@@ -81,6 +83,8 @@ type NarrativeRelationItem = {
   label: string;
 };
 
+type DndStatStringKey = Exclude<keyof DndStats, "enabled">;
+
 const fieldLabelStyle: React.CSSProperties = {
   display: "block",
   marginBottom: "6px",
@@ -98,6 +102,55 @@ const contextualActionButtonStyle: React.CSSProperties = {
   alignItems: "center",
   gap: "8px",
 };
+
+const abilityFields: Array<{ key: DndStatStringKey; label: string }> = [
+  { key: "forza", label: "FOR" },
+  { key: "destrezza", label: "DES" },
+  { key: "costituzione", label: "COS" },
+  { key: "intelligenza", label: "INT" },
+  { key: "saggezza", label: "SAG" },
+  { key: "carisma", label: "CAR" },
+];
+
+const coreStatFields: Array<{ key: DndStatStringKey; label: string; placeholder: string }> = [
+  { key: "livello", label: "Livello", placeholder: "Es. 5" },
+  { key: "classe", label: "Classe", placeholder: "Es. Guerriero 5" },
+  { key: "ca", label: "CA", placeholder: "Es. 17" },
+  { key: "puntiFerita", label: "Punti ferita", placeholder: "Es. 38" },
+  { key: "velocita", label: "Velocità", placeholder: "Es. 9 m" },
+  { key: "iniziativa", label: "Iniziativa", placeholder: "Es. +3" },
+  { key: "bonusCompetenza", label: "Bonus competenza", placeholder: "Es. +3" },
+  { key: "dadoVita", label: "Dado vita", placeholder: "Es. 1d10" },
+  { key: "challengeRating", label: "GS / CR", placeholder: "Es. 2" },
+];
+
+const longStatFields: Array<{ key: DndStatStringKey; label: string; placeholder: string }> = [
+  { key: "armiEquipaggiate", label: "Armi equipaggiate", placeholder: "Es. Spadone + arco corto" },
+  { key: "equipaggiamento", label: "Equipaggiamento", placeholder: "Es. Scudo, pozioni, focus arcano" },
+  { key: "competenze", label: "Competenze", placeholder: "Es. Atletica, Percezione, Furtività" },
+  { key: "sensi", label: "Sensi", placeholder: "Es. Scurovisione 18 m" },
+  { key: "linguaggi", label: "Linguaggi", placeholder: "Es. Comune, Elfico" },
+];
+
+function normalizeStatsPatch(stats: DndStats | undefined): DndStats | undefined {
+  if (!stats) return undefined;
+
+  const next: Partial<Record<DndStatStringKey, string>> & Pick<DndStats, "enabled"> = {};
+  if (typeof stats.enabled === "boolean") {
+    next.enabled = stats.enabled;
+  }
+
+  (Object.entries(stats) as Array<[keyof DndStats, DndStats[keyof DndStats]]>).forEach(([key, value]) => {
+    if (key === "enabled") return;
+    if (typeof value !== "string") return;
+    const normalized = value.trim();
+    if (normalized) {
+      next[key] = normalized;
+    }
+  });
+
+  return Object.keys(next).length > 0 ? next : undefined;
+}
 
 function handleEnterBlur(
   event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>
@@ -524,6 +577,13 @@ export default function EntityEditor({
   const TypeIcon = getEntityTypeIcon(selectedEntity.type);
   const metadataFields = getMetadataFieldsForEntityType(selectedEntity.type, entityTypes);
   const metadata = selectedEntity.metadata ?? {};
+  const stats = selectedEntity.stats;
+  const statsEnabled = Boolean(stats?.enabled);
+
+  function getStatValue(fieldKey: DndStatStringKey): string {
+    const value = stats?.[fieldKey];
+    return typeof value === "string" ? value : "";
+  }
 
   useEffect(() => {
     let isCancelled = false;
@@ -531,24 +591,25 @@ export default function EntityEditor({
     void (async () => {
       try {
         const nextSrc = await resolveImageRefToSrc(selectedEntity.image);
+        const safeNextSrc = nextSrc ?? "";
 
         if (isCancelled) {
-          if (nextSrc.startsWith("blob:")) {
-            URL.revokeObjectURL(nextSrc);
+          if (safeNextSrc.startsWith("blob:")) {
+            URL.revokeObjectURL(safeNextSrc);
           }
           return;
         }
 
-        if (activeObjectUrlRef.current && activeObjectUrlRef.current !== nextSrc) {
+        if (activeObjectUrlRef.current && activeObjectUrlRef.current !== safeNextSrc) {
           URL.revokeObjectURL(activeObjectUrlRef.current);
           activeObjectUrlRef.current = null;
         }
 
-        if (nextSrc.startsWith("blob:")) {
-          activeObjectUrlRef.current = nextSrc;
+        if (safeNextSrc.startsWith("blob:")) {
+          activeObjectUrlRef.current = safeNextSrc;
         }
 
-        setResolvedImageSrc(nextSrc);
+        setResolvedImageSrc(safeNextSrc);
       } catch (error) {
         console.error("Impossibile caricare l'immagine", error);
         if (!isCancelled) {
@@ -683,6 +744,26 @@ export default function EntityEditor({
     onUpdateEntity({
       type: nextType,
       metadata: remapMetadataForType(selectedEntity.metadata, nextType, entityTypes),
+    });
+  }
+
+  function handleEnableStats() {
+    onUpdateEntity({ stats: { enabled: true } });
+  }
+
+  function handleDisableStats() {
+    onUpdateEntity({ stats: undefined });
+  }
+
+  function updateStatField(fieldKey: DndStatStringKey, value: string) {
+    const nextStats: DndStats = {
+      ...(stats ?? {}),
+      enabled: true,
+      [fieldKey]: value,
+    };
+
+    onUpdateEntity({
+      stats: normalizeStatsPatch(nextStats),
     });
   }
 
@@ -978,6 +1059,171 @@ export default function EntityEditor({
           </div>
         ) : (
           <div style={{ color: "#9fb0c7" }}>Nessun metadato compilato.</div>
+        )}
+      </CollapsibleSection>
+
+
+      <CollapsibleSection
+        title="Statistiche D&D"
+        accentColor={accentColor}
+        icon={<Shield size={16} color={accentColor} />}
+      >
+        {mode === "edit" ? (
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            {statsEnabled ? (
+              <button type="button" onClick={handleDisableStats} style={ghostButtonStyle}>
+                Disattiva sezione
+              </button>
+            ) : (
+              <button type="button" onClick={handleEnableStats} style={primaryButtonStyle}>
+                Attiva sezione
+              </button>
+            )}
+          </div>
+        ) : null}
+
+        {!statsEnabled && mode !== "edit" ? (
+          <div style={{ color: "#9fb0c7" }}>Nessuna scheda D&D attiva per questa entità.</div>
+        ) : !statsEnabled && mode === "edit" ? (
+          <div style={{ color: "#9fb0c7" }}>
+            Attiva la sezione per compilare caratteristiche, CA, PF, equipaggiamento e altre stats.
+          </div>
+        ) : mode === "edit" ? (
+          <div style={{ display: "grid", gap: 16 }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                gap: 12,
+              }}
+            >
+              {coreStatFields.map((field) => (
+                <div key={field.key} style={{ display: "grid", gap: 8 }}>
+                  <label style={fieldLabelStyle}>{field.label}</label>
+                  <input
+                    type="text"
+                    value={getStatValue(field.key)}
+                    onChange={(e) => updateStatField(field.key, e.target.value)}
+                    onBlur={(e) => updateStatField(field.key, e.target.value)}
+                    onKeyDown={handleEnterBlur}
+                    placeholder={field.placeholder}
+                    style={inputDarkStyle}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))",
+                gap: 12,
+              }}
+            >
+              {abilityFields.map((field) => (
+                <div key={field.key} style={{ display: "grid", gap: 8 }}>
+                  <label style={fieldLabelStyle}>{field.label}</label>
+                  <input
+                    type="text"
+                    value={getStatValue(field.key)}
+                    onChange={(e) => updateStatField(field.key, e.target.value)}
+                    onBlur={(e) => updateStatField(field.key, e.target.value)}
+                    onKeyDown={handleEnterBlur}
+                    placeholder="Es. 14"
+                    style={inputDarkStyle}
+                  />
+                </div>
+              ))}
+            </div>
+
+            {longStatFields.map((field) => (
+              <div key={field.key} style={{ display: "grid", gap: 8 }}>
+                <label style={fieldLabelStyle}>{field.label}</label>
+                <textarea
+                  value={getStatValue(field.key)}
+                  onChange={(e) => updateStatField(field.key, e.target.value)}
+                  onBlur={(e) => updateStatField(field.key, e.target.value)}
+                  placeholder={field.placeholder}
+                  rows={2}
+                  style={{ ...textareaStyle, minHeight: 70 }}
+                />
+              </div>
+            ))}
+
+            <div style={{ display: "grid", gap: 8 }}>
+              <label style={fieldLabelStyle}>Note scheda</label>
+              <textarea
+                value={stats?.note ?? ""}
+                onChange={(e) => updateStatField("note", e.target.value)}
+                onBlur={(e) => updateStatField("note", e.target.value)}
+                placeholder="Es. capacità speciali, resistenze, immunità, appunti da combattimento"
+                rows={4}
+                style={textareaStyle}
+              />
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "grid", gap: 16 }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+                gap: 12,
+              }}
+            >
+              {coreStatFields.map((field) => {
+                const rawValue = stats?.[field.key];
+                const value = typeof rawValue === "string" ? rawValue.trim() : "";
+                if (!value) return null;
+                return <MetadataReadCard key={field.key} label={field.label} value={value} />;
+              })}
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
+                gap: 10,
+              }}
+            >
+              {abilityFields.map((field) => (
+                <div
+                  key={field.key}
+                  style={{
+                    padding: "14px 10px",
+                    borderRadius: 16,
+                    border: "1px solid rgba(167,139,78,0.14)",
+                    background:
+                      "linear-gradient(180deg, rgba(27,23,18,0.95) 0%, rgba(14,15,18,0.98) 100%)",
+                    display: "grid",
+                    gap: 6,
+                    justifyItems: "center",
+                  }}
+                >
+                  <div style={{ fontSize: 11, color: "#b89c63", fontWeight: 800 }}>{field.label}</div>
+                  <div style={{ fontSize: 22, color: "#f6efe2", fontWeight: 800 }}>
+                    {stats?.[field.key] || "—"}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: 12,
+              }}
+            >
+              {longStatFields.map((field) => {
+                const rawValue = stats?.[field.key];
+                const value = typeof rawValue === "string" ? rawValue.trim() : "";
+                if (!value) return null;
+                return <MetadataReadCard key={field.key} label={field.label} value={value} />;
+              })}
+              {stats?.note?.trim() ? <MetadataReadCard label="Note scheda" value={stats.note} /> : null}
+            </div>
+          </div>
         )}
       </CollapsibleSection>
 

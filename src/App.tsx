@@ -61,6 +61,7 @@ import {
 } from "./data";
 import { useLocalStorageState } from "./hooks/useLocalStorageState";
 import type {
+  DndStats,
   Entity,
   EntityType,
   EntityTypeDefinition,
@@ -92,7 +93,37 @@ type GraphNodeData = {
   isConnectedToSelection?: boolean;
   isDimmed?: boolean;
   level?: 0 | 1 | 2;
+  metaLabel?: string;
 };
+
+type DndStatStringKey = Exclude<keyof DndStats, "enabled">;
+
+const DND_STAT_KEYS: DndStatStringKey[] = [
+  "livello",
+  "classe",
+  "ca",
+  "puntiFerita",
+  "velocita",
+  "iniziativa",
+  "bonusCompetenza",
+  "dadoVita",
+  "forza",
+  "destrezza",
+  "costituzione",
+  "intelligenza",
+  "saggezza",
+  "carisma",
+  "armiEquipaggiate",
+  "equipaggiamento",
+  "sensi",
+  "linguaggi",
+  "competenze",
+  "challengeRating",
+  "note",
+];
+
+const RELATION_TYPE_PLACE_LINKS = new Set(["abita in", "si svolge in", "si trova in", "controlla", "proviene da"]);
+
 
 const ENTITY_TYPES_STORAGE_KEY = "worldbuilder_entity_types";
 
@@ -108,6 +139,16 @@ const DEFAULT_ENTITY_TYPES: EntityTypeDefinition[] = [
         label: "Regione",
         kind: "text",
         placeholder: "Es. Costa orientale",
+      },
+      {
+        key: "siTrovaIn",
+        label: "Si trova in",
+        kind: "entity-reference",
+        placeholder: "Es. Ducato del Nord",
+        allowedEntityTypes: ["luogo"],
+        relationType: "si trova in",
+        relationInverseType: "contiene",
+        autoCreateTarget: false,
       },
       {
         key: "clima",
@@ -140,6 +181,42 @@ const DEFAULT_ENTITY_TYPES: EntityTypeDefinition[] = [
         label: "Ruolo",
         kind: "text",
         placeholder: "Es. Esploratore",
+      },
+      {
+        key: "razza",
+        label: "Razza",
+        kind: "text",
+        placeholder: "Es. Tiefling / Nano delle colline",
+      },
+      {
+        key: "padre",
+        label: "Padre",
+        kind: "entity-reference",
+        placeholder: "Es. Armand",
+        allowedEntityTypes: ["personaggio"],
+        relationType: "figlio di",
+        relationInverseType: "ha come figlio",
+        autoCreateTarget: false,
+      },
+      {
+        key: "madre",
+        label: "Madre",
+        kind: "entity-reference",
+        placeholder: "Es. Lyra",
+        allowedEntityTypes: ["personaggio"],
+        relationType: "figlio di",
+        relationInverseType: "ha come figlio",
+        autoCreateTarget: false,
+      },
+      {
+        key: "coniuge",
+        label: "Coniuge / partner",
+        kind: "entity-reference",
+        placeholder: "Es. Elira",
+        allowedEntityTypes: ["personaggio"],
+        relationType: "coniuge di",
+        relationInverseType: "coniuge di",
+        autoCreateTarget: false,
       },
       {
         key: "fazione",
@@ -316,6 +393,211 @@ function parseNumberLike(value: string | undefined): number | null {
   return Number.isNaN(extracted) ? null : extracted;
 }
 
+function normalizeDndStats(rawStats: unknown): DndStats | undefined {
+  if (!rawStats || typeof rawStats !== "object") return undefined;
+
+  const input = rawStats as Partial<Record<keyof DndStats, unknown>>;
+  const next: Partial<Record<DndStatStringKey, string>> & Pick<DndStats, "enabled"> = {};
+
+  if (typeof input.enabled === "boolean") {
+    next.enabled = input.enabled;
+  }
+
+  DND_STAT_KEYS.forEach((key) => {
+    const value = input[key];
+    if (typeof value !== "string") return;
+    const normalized = normalizeText(value);
+    if (normalized) {
+      next[key] = normalized;
+    }
+  });
+
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function findMetadataRelationTarget(
+  sourceEntityId: string,
+  rawFieldKeys: string[],
+  relations: Relation[]
+): string | null {
+  const fieldKeys = new Set(rawFieldKeys.map((key) => key.trim().toLowerCase()).filter(Boolean));
+
+  for (const relation of relations) {
+    if (relation.fromEntityId !== sourceEntityId) continue;
+
+    const sourceFieldKey = relation.sourceFieldKey?.trim().toLowerCase();
+    if (sourceFieldKey && fieldKeys.has(sourceFieldKey)) {
+      return relation.toEntityId;
+    }
+
+    if (!sourceFieldKey && RELATION_TYPE_PLACE_LINKS.has(normalizeRelationType(relation.type))) {
+      return relation.toEntityId;
+    }
+  }
+
+  return null;
+}
+
+function enrichEntitiesWithDerivedMetadata(
+  rawEntities: Entity[],
+  relations: Relation[]
+): Entity[] {
+  const entityMap = new Map(rawEntities.map((entity) => [entity.id, entity] as const));
+
+  function resolvePlaceHierarchy(placeId: string | null) {
+    if (!placeId) {
+      return { placeName: "", regionName: "" };
+    }
+
+    const visited = new Set<string>();
+    let currentPlaceId: string | null = placeId;
+    let firstPlaceName = "";
+    let topPlaceName = "";
+    let depth = 0;
+
+    while (currentPlaceId && !visited.has(currentPlaceId)) {
+      visited.add(currentPlaceId);
+      const currentPlace = entityMap.get(currentPlaceId);
+      if (!currentPlace || currentPlace.type !== "luogo") {
+        break;
+      }
+
+      if (!firstPlaceName) {
+        firstPlaceName = currentPlace.name;
+      }
+
+      topPlaceName = currentPlace.name;
+      const explicitRegion = currentPlace.metadata?.regione?.trim();
+      const parentPlaceId = findMetadataRelationTarget(currentPlace.id, ["sitrovain"], relations);
+
+      if (!parentPlaceId) {
+        return {
+          placeName: firstPlaceName,
+          regionName: explicitRegion || (depth > 0 ? topPlaceName : ""),
+        };
+      }
+
+      depth += 1;
+      currentPlaceId = parentPlaceId;
+    }
+
+    return { placeName: firstPlaceName, regionName: topPlaceName };
+  }
+
+  return rawEntities.map((entity) => {
+    const metadata = { ...(entity.metadata ?? {}) };
+    let locationRelationId: string | null = null;
+
+    if (entity.type === "luogo") {
+      locationRelationId = entity.id;
+    } else if (entity.type === "personaggio") {
+      locationRelationId = findMetadataRelationTarget(entity.id, ["abitain"], relations);
+    } else if (entity.type === "fazione") {
+      locationRelationId = findMetadataRelationTarget(entity.id, ["territorio"], relations);
+    } else if (entity.type === "evento") {
+      locationRelationId = findMetadataRelationTarget(entity.id, ["luogo"], relations);
+    } else if (entity.type === "oggetto") {
+      locationRelationId = findMetadataRelationTarget(entity.id, ["origine"], relations);
+      const maybePlace = locationRelationId ? entityMap.get(locationRelationId) : null;
+      if (maybePlace?.type !== "luogo") {
+        locationRelationId = null;
+      }
+    }
+
+    const geography = resolvePlaceHierarchy(locationRelationId);
+
+    if (entity.type !== "luogo" && geography.placeName && !metadata.luogo?.trim()) {
+      metadata.luogo = geography.placeName;
+    }
+
+    if (geography.regionName && !metadata.regione?.trim()) {
+      metadata.regione = geography.regionName;
+    }
+
+    return {
+      ...entity,
+      metadata,
+    };
+  });
+}
+
+function hashStringToIndex(value: string, modulo: number) {
+  if (!value || modulo <= 0) return 0;
+
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  return hash % modulo;
+}
+
+function getRegionAccentColor(baseTypeColor: string, regionName: string | undefined) {
+  if (!regionName?.trim()) return baseTypeColor;
+
+  const palette = [
+    "#60a5fa",
+    "#34d399",
+    "#f59e0b",
+    "#c084fc",
+    "#f472b6",
+    "#2dd4bf",
+  ];
+
+  return palette[hashStringToIndex(regionName.trim().toLowerCase(), palette.length)] ?? baseTypeColor;
+}
+
+function buildGraphMetaLabel(entity: Entity) {
+  const metadata = entity.metadata ?? {};
+  const parts: string[] = [];
+
+  if (entity.type === "personaggio") {
+    const race = metadata.razza?.trim();
+    const region = metadata.regione?.trim();
+    const place = metadata.luogo?.trim();
+
+    if (race) parts.push(race);
+    if (region) parts.push(`Regione: ${region}`);
+    else if (place) parts.push(`Luogo: ${place}`);
+
+    return parts.slice(0, 2).join(" · ");
+  }
+
+  if (entity.type === "luogo") {
+    const region = metadata.regione?.trim();
+    if (region && region.toLowerCase() !== entity.name.trim().toLowerCase()) {
+      return `Regione: ${region}`;
+    }
+    return region || "";
+  }
+
+  if (entity.type === "fazione") {
+    const region = metadata.regione?.trim();
+    const territory = metadata.territorio?.trim();
+    if (region) parts.push(`Regione: ${region}`);
+    if (territory) parts.push(`Territorio: ${territory}`);
+    return parts.slice(0, 2).join(" · ");
+  }
+
+  if (entity.type === "evento") {
+    const place = metadata.luogo?.trim();
+    const region = metadata.regione?.trim();
+    if (place) parts.push(place);
+    if (region) parts.push(region);
+    return parts.slice(0, 2).join(" · ");
+  }
+
+  if (entity.type === "oggetto") {
+    const origin = metadata.origine?.trim();
+    const region = metadata.regione?.trim();
+    if (origin) parts.push(`Origine: ${origin}`);
+    if (region) parts.push(region);
+    return parts.slice(0, 2).join(" · ");
+  }
+
+  return metadata.regione?.trim() ?? "";
+}
+
 function compareTimelineEvents(a: TimelineEvent, b: TimelineEvent) {
   if (a.parsedOrder !== null && b.parsedOrder !== null) {
     if (a.parsedOrder !== b.parsedOrder) {
@@ -356,6 +638,75 @@ function slugifyEntityTypeId(value: string) {
 
 function isBuiltInEntityType(type: string) {
   return DEFAULT_ENTITY_TYPES.some((item) => item.id === type);
+}
+
+
+function normalizeMetadataFingerprint(metadata: Entity["metadata"] | undefined) {
+  const entries = Object.entries(metadata ?? {})
+    .map(([key, value]) => [
+      key.trim().toLowerCase(),
+      String(value ?? "").trim().toLowerCase(),
+    ] as const)
+    .filter(([key, value]) => key && value)
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  return JSON.stringify(entries);
+}
+
+function buildImportedEntityName(entities: Entity[], source: Entity): string {
+  const baseName = `${source.name} (import)`;
+
+  if (!hasDuplicateEntityName(entities, source.type, baseName)) {
+    return baseName;
+  }
+
+  let copyIndex = 2;
+  while (hasDuplicateEntityName(entities, source.type, `${baseName} ${copyIndex}`)) {
+    copyIndex += 1;
+  }
+
+  return `${baseName} ${copyIndex}`;
+}
+
+function mergeEntityTypesForImport(
+  currentTypes: EntityTypeDefinition[],
+  importedTypes: EntityTypeDefinition[]
+) {
+  const map = new Map<string, EntityTypeDefinition>();
+
+  currentTypes.forEach((type) => {
+    map.set(type.id, type);
+  });
+
+  importedTypes.forEach((type) => {
+    const existing = map.get(type.id);
+
+    if (!existing) {
+      map.set(type.id, type);
+      return;
+    }
+
+    const existingFields = existing.fields ?? [];
+    const importedFields = type.fields ?? [];
+
+    const fieldMap = new Map<string, MetadataFieldDefinition>();
+    existingFields.forEach((field) => fieldMap.set(field.key, field));
+    importedFields.forEach((field) => {
+      if (!fieldMap.has(field.key)) {
+        fieldMap.set(field.key, field);
+      }
+    });
+
+    map.set(type.id, {
+      ...existing,
+      label: existing.label || type.label,
+      color: existing.color || type.color,
+      builtIn: existing.builtIn || type.builtIn,
+      fields: Array.from(fieldMap.values()),
+    });
+  });
+
+  return Array.from(map.values());
 }
 
 function sanitizeEntityTypes(
@@ -427,19 +778,22 @@ function sanitizeEntityTypes(
                         : undefined,
                   };
                 })
-                .filter((field: MetadataFieldDefinition | null): field is MetadataFieldDefinition => field !== null)
+                .filter(
+                  (field: MetadataFieldDefinition | null): field is MetadataFieldDefinition =>
+                    field !== null
+                )
             : undefined;
 
-        return {
-  id,
-  label,
-  color,
-  builtIn: Boolean(item?.builtIn) || isBuiltInEntityType(id),
-  fields,
-} as EntityTypeDefinition;
-})
-.filter((item): item is EntityTypeDefinition => item !== null)
-: [];
+          return {
+            id,
+            label,
+            color,
+            builtIn: Boolean(item?.builtIn) || isBuiltInEntityType(id),
+            fields,
+          } as EntityTypeDefinition;
+        })
+        .filter((item): item is EntityTypeDefinition => item !== null)
+    : [];
 
   const map = new Map<string, EntityTypeDefinition>();
 
@@ -448,7 +802,29 @@ function sanitizeEntityTypes(
   });
 
   fromStorage.forEach((item) => {
-    map.set(item.id, item);
+    const existing = map.get(item.id);
+
+    if (!existing) {
+      map.set(item.id, item);
+      return;
+    }
+
+    const existingFields = existing.fields ?? [];
+    const incomingFields = item.fields ?? [];
+    const fieldMap = new Map<string, MetadataFieldDefinition>();
+
+    existingFields.forEach((field) => fieldMap.set(field.key, field));
+    incomingFields.forEach((field) => {
+      const current = fieldMap.get(field.key);
+      fieldMap.set(field.key, current ? { ...field, ...current } : field);
+    });
+
+    map.set(item.id, {
+      ...existing,
+      ...item,
+      builtIn: Boolean(existing.builtIn || item.builtIn),
+      fields: Array.from(fieldMap.values()),
+    });
   });
 
   if (entities) {
@@ -711,8 +1087,13 @@ function buildGraphElements(
   }
 
   const rawNodes: Node<GraphNodeData>[] = localEntities.map((entity) => {
-    const accentColor = getTypeColor(entity.type, entityTypes);
+    const baseAccentColor = getTypeColor(entity.type, entityTypes);
+    const accentColor =
+      entity.type === "personaggio"
+        ? getRegionAccentColor(baseAccentColor, entity.metadata?.regione)
+        : baseAccentColor;
     const typeLabel = getTypeLabel(entity.type, entityTypes);
+    const metaLabel = buildGraphMetaLabel(entity);
     const isSelected = selectedEntityId === entity.id;
     const isConnectedToSelection = connectedIds.has(entity.id);
     const inLevel0 = level0Ids?.has(entity.id) ?? false;
@@ -747,6 +1128,7 @@ function buildGraphElements(
         isConnectedToSelection,
         isDimmed,
         level,
+        metaLabel: metaLabel || undefined,
       },
       style: {
         width: NODE_WIDTH + 50,
@@ -864,6 +1246,7 @@ function sanitizeEntities(rawEntities: unknown): Entity[] {
             : isBuiltInEntityType(safeType)
             ? getDefaultMetadata(safeType)
             : {},
+        stats: normalizeDndStats(entity?.stats),
         image: typeof entity?.image === "string" ? entity.image : undefined,
         createdAt:
           typeof entity?.createdAt === "string" ? entity.createdAt : nowIso,
@@ -943,6 +1326,193 @@ function isEditableTarget(target: EventTarget | null) {
   );
 }
 
+
+type ImageAssetRecord = {
+  id: string;
+  dataUrl: string;
+  mimeType?: string;
+};
+
+type WorldDataWithImages = WorldData & {
+  imageAssets?: ImageAssetRecord[];
+};
+
+const IMAGE_DB_NAME = "worldbuilder-assets";
+const IMAGE_STORE_NAME = "images";
+const IMAGE_ASSET_PREFIX = "asset://";
+
+function openImageAssetDatabase(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(IMAGE_DB_NAME, 1);
+
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains(IMAGE_STORE_NAME)) {
+        database.createObjectStore(IMAGE_STORE_NAME);
+      }
+    };
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () =>
+      reject(request.error ?? new Error("Impossibile aprire IndexedDB"));
+  });
+}
+
+function isAssetImageRef(value?: string | null): boolean {
+  return typeof value === "string" && value.startsWith(IMAGE_ASSET_PREFIX);
+}
+
+function buildAssetImageRef(assetId: string): string {
+  return `${IMAGE_ASSET_PREFIX}${assetId}`;
+}
+
+function parseAssetImageRef(value?: string | null): string | null {
+  if (!isAssetImageRef(value)) return null;
+  return String(value).slice(IMAGE_ASSET_PREFIX.length) || null;
+}
+
+function dataUrlToBlob(dataUrl: string): Blob {
+  const parts = dataUrl.split(",");
+  if (parts.length < 2) {
+    throw new Error("Data URL non valido");
+  }
+
+  const header = parts[0] ?? "";
+  const body = parts.slice(1).join(",");
+  const mimeMatch = header.match(/data:(.*?);base64/);
+  const mimeType = mimeMatch?.[1] || "application/octet-stream";
+  const binary = window.atob(body);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return new Blob([bytes], { type: mimeType });
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error("Impossibile convertire il blob in data URL"));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Errore FileReader"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function getImageBlobByAssetId(assetId: string): Promise<Blob | null> {
+  const database = await openImageAssetDatabase();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(IMAGE_STORE_NAME, "readonly");
+    const store = transaction.objectStore(IMAGE_STORE_NAME);
+    const request = store.get(assetId);
+
+    request.onsuccess = () => {
+      database.close();
+      const result = request.result;
+      resolve(result instanceof Blob ? result : null);
+    };
+    request.onerror = () => {
+      database.close();
+      reject(request.error ?? new Error("Impossibile leggere l'immagine"));
+    };
+  });
+}
+
+async function putImageBlob(blob: Blob, forcedId?: string): Promise<string> {
+  const database = await openImageAssetDatabase();
+
+  return new Promise((resolve, reject) => {
+    const assetId = forcedId ?? crypto.randomUUID();
+    const transaction = database.transaction(IMAGE_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(IMAGE_STORE_NAME);
+
+    transaction.oncomplete = () => {
+      database.close();
+      resolve(assetId);
+    };
+    transaction.onerror = () => {
+      database.close();
+      reject(transaction.error ?? new Error("Impossibile salvare l'immagine"));
+    };
+
+    store.put(blob, assetId);
+  });
+}
+
+async function saveDataUrlImageAsAssetRef(dataUrl: string): Promise<string> {
+  const blob = dataUrlToBlob(dataUrl);
+  const assetId = await putImageBlob(blob);
+  return buildAssetImageRef(assetId);
+}
+
+async function collectImageAssetsForExport(
+  imageRefs: string[]
+): Promise<ImageAssetRecord[]> {
+  const uniqueAssetIds = Array.from(
+    new Set(
+      imageRefs
+        .map((imageRef) => parseAssetImageRef(imageRef))
+        .filter((assetId): assetId is string => Boolean(assetId))
+    )
+  );
+
+  const assets = await Promise.all(
+    uniqueAssetIds.map(async (assetId): Promise<ImageAssetRecord | null> => {
+      const blob = await getImageBlobByAssetId(assetId);
+      if (!blob) return null;
+
+      return {
+        id: assetId,
+        dataUrl: await blobToDataUrl(blob),
+        ...(blob.type ? { mimeType: blob.type } : {}),
+      };
+    })
+  );
+
+  return assets.filter((asset): asset is ImageAssetRecord => asset !== null);
+}
+
+
+async function importImageAssetsFromWorldData(imageAssets?: ImageAssetRecord[]): Promise<void> {
+  if (!Array.isArray(imageAssets) || imageAssets.length === 0) return;
+
+  for (const asset of imageAssets) {
+    if (!asset || typeof asset.id !== "string" || typeof asset.dataUrl !== "string") {
+      continue;
+    }
+
+    const blob = dataUrlToBlob(asset.dataUrl);
+    await putImageBlob(blob, asset.id);
+  }
+}
+
+async function deleteAllImageAssets(): Promise<void> {
+  const database = await openImageAssetDatabase();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(IMAGE_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(IMAGE_STORE_NAME);
+    const request = store.clear();
+
+    request.onsuccess = () => {
+      database.close();
+      resolve();
+    };
+    request.onerror = () => {
+      database.close();
+      reject(request.error ?? new Error("Impossibile cancellare le immagini"));
+    };
+  });
+}
+
 export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -961,7 +1531,7 @@ export default function App() {
     initialRelations
   );
 
-  const entities = useMemo(() => sanitizeEntities(rawEntities), [rawEntities]);
+  const sanitizedEntities = useMemo(() => sanitizeEntities(rawEntities), [rawEntities]);
   const relations = useMemo(() => sanitizeRelations(rawRelations), [rawRelations]);
 
   const [rawEntityTypes, setRawEntityTypes] = useLocalStorageState<EntityTypeDefinition[]>(
@@ -970,8 +1540,13 @@ export default function App() {
   );
 
   const entityTypes = useMemo(
-    () => sanitizeEntityTypes(rawEntityTypes, entities),
-    [rawEntityTypes, entities]
+    () => sanitizeEntityTypes(rawEntityTypes, sanitizedEntities),
+    [rawEntityTypes, sanitizedEntities]
+  );
+
+  const entities = useMemo(
+    () => enrichEntitiesWithDerivedMetadata(sanitizedEntities, relations),
+    [sanitizedEntities, relations]
   );
 
   const [selectedId, setSelectedId] = useState<string>(
@@ -1632,6 +2207,10 @@ export default function App() {
     );
     if (!confirmed) return;
 
+    void deleteAllImageAssets().catch((error) => {
+      console.error(error);
+    });
+
     localStorage.removeItem(ENTITIES_STORAGE_KEY);
     localStorage.removeItem(RELATIONS_STORAGE_KEY);
     localStorage.removeItem(ENTITY_TYPES_STORAGE_KEY);
@@ -1666,32 +2245,42 @@ export default function App() {
     setIsFloatingCreateOpen(false);
   }
 
-  function exportData() {
-    const data: WorldData = {
-      entityTypes,
-      entities,
-      relations,
-    };
+  async function exportData() {
+    try {
+      const imageAssets = await collectImageAssetsForExport(
+        entities.map((entity) => entity.image ?? "")
+      );
 
-    const blob = new Blob([JSON.stringify(data, null, 2)], {
-      type: "application/json",
-    });
+      const data: WorldDataWithImages = {
+        entityTypes,
+        entities,
+        relations,
+        imageAssets,
+      };
 
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    const date = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: "application/json",
+      });
 
-    a.href = url;
-    a.download = `worldbuilder-backup-${date}.json`;
-    a.click();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const date = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
 
-    URL.revokeObjectURL(url);
+      a.href = url;
+      a.download = `worldbuilder-backup-${date}.json`;
+      a.click();
+
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error(error);
+      window.alert("Impossibile esportare il backup completo con le immagini.");
+    }
   }
 
   function isValidWorldData(data: unknown): data is WorldData {
     if (!data || typeof data !== "object") return false;
 
-    const candidate = data as WorldData;
+    const candidate = data as WorldDataWithImages;
 
     if (!Array.isArray(candidate.entities) || !Array.isArray(candidate.relations)) {
       return false;
@@ -1774,7 +2363,18 @@ export default function App() {
         );
       });
 
-    return entitiesValid && relationsValid && entityTypesValid;
+    const imageAssetsValid =
+      typeof candidate.imageAssets === "undefined" ||
+      candidate.imageAssets.every((item) => {
+        return (
+          item &&
+          typeof item.id === "string" &&
+          typeof item.dataUrl === "string" &&
+          (typeof item.mimeType === "undefined" || typeof item.mimeType === "string")
+        );
+      });
+
+    return entitiesValid && relationsValid && entityTypesValid && imageAssetsValid;
   }
 
   function importData(event: React.ChangeEvent<HTMLInputElement>) {
@@ -1783,7 +2383,7 @@ export default function App() {
 
     const reader = new FileReader();
 
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
         const text = reader.result;
         if (typeof text !== "string") {
@@ -1796,14 +2396,63 @@ export default function App() {
           throw new Error("Formato JSON non valido.");
         }
 
-        const sanitizedEntities = sanitizeEntities(parsed.entities);
-        const entityIdSet = new Set(sanitizedEntities.map((entity) => entity.id));
-        const sanitizedEntityTypes = sanitizeEntityTypes(
-          parsed.entityTypes ?? DEFAULT_ENTITY_TYPES,
-          sanitizedEntities
+       const importMode = window.prompt(
+  [
+    "Scegli modalità import:",
+    "- scrivi REPLACE per sostituire tutto",
+    "- scrivi MERGE per aggiungere ai dati esistenti",
+  ].join("\n"),
+  "MERGE"
+);
+
+        if (!importMode) {
+          if (fileInputRef.current) {
+            fileInputRef.current.value = "";
+          }
+          return;
+        }
+
+        const normalizedMode = importMode.trim().toLowerCase();
+
+        if (normalizedMode !== "replace" && normalizedMode !== "merge") {
+          alert('Valore non valido. Scrivi solo "REPLACE" oppure "MERGE".');
+          return;
+        }
+
+        if (normalizedMode === "replace") {
+          await deleteAllImageAssets().catch((error) => {
+            console.error(error);
+          });
+        }
+
+        await importImageAssetsFromWorldData((parsed as WorldDataWithImages).imageAssets);
+
+        const importedEntitiesRaw = sanitizeEntities(parsed.entities);
+        const importedEntities = await Promise.all(
+          importedEntitiesRaw.map(async (entity) => {
+            if (
+              typeof entity.image === "string" &&
+              entity.image.startsWith("data:image/")
+            ) {
+              try {
+                const image = await saveDataUrlImageAsAssetRef(entity.image);
+                return { ...entity, image };
+              } catch (error) {
+                console.error(error);
+              }
+            }
+
+            return entity;
+          })
         );
 
-        const sanitizedRelations = parsed.relations
+        const importedEntityIdSet = new Set(importedEntities.map((entity) => entity.id));
+        const importedEntityTypes = sanitizeEntityTypes(
+          parsed.entityTypes ?? DEFAULT_ENTITY_TYPES,
+          importedEntities
+        );
+
+        const importedRelations = parsed.relations
           .map((relation) => ({
             ...relation,
             id:
@@ -1827,47 +2476,201 @@ export default function App() {
             (relation) =>
               relation.id &&
               relation.type &&
-              entityIdSet.has(relation.fromEntityId) &&
-              entityIdSet.has(relation.toEntityId)
+              importedEntityIdSet.has(relation.fromEntityId) &&
+              importedEntityIdSet.has(relation.toEntityId)
           );
 
-        const confirmed = window.confirm(
-          "Importando il file verranno sostituiti tutti i dati attuali. Vuoi continuare?"
-        );
+        if (normalizedMode === "replace") {
+          setRawEntityTypes(importedEntityTypes);
+          setRawEntities(importedEntities);
+          setRawRelations(importedRelations);
 
-        if (!confirmed) {
-          if (fileInputRef.current) {
-            fileInputRef.current.value = "";
-          }
+          setSelectedId(importedEntities[0]?.id ?? "");
+          setSearch("");
+          setArchiveTypeFilter("all");
+          setTagFilter("");
+          setSortMode("lastModified-desc");
+          setIsCreatingEntity(false);
+          setCreateEntityType(importedEntityTypes[0]?.id ?? "luogo");
+          setNewTag("");
+          setRelationType(RELATION_PRESETS[DEFAULT_RELATION_PRESET_INDEX]?.type ?? "");
+          setRelationInverseType(
+            RELATION_PRESETS[DEFAULT_RELATION_PRESET_INDEX]?.inverseType ?? ""
+          );
+          setRelationTargetId("");
+          setGraphViewMode("focused");
+          setGraphFilter("all");
+          setGraphViewType("all");
+          setGraphViewTag("");
+          setTimelinePeriodFilter("all");
+          setGraphTypeFilters(buildDefaultGraphTypeFilters(importedEntityTypes));
+          setIsFloatingCreateOpen(false);
+
+          alert("Import completato in modalità replace.");
           return;
         }
 
-        setRawEntityTypes(sanitizedEntityTypes);
-        setRawEntities(sanitizedEntities);
-        setRawRelations(sanitizedRelations);
+        const currentEntities = sanitizeEntities(rawEntities);
+        const currentRelations = sanitizeRelations(rawRelations);
+        const currentEntityTypes = sanitizeEntityTypes(rawEntityTypes, currentEntities);
 
-        setSelectedId(sanitizedEntities[0]?.id ?? "");
-        setSearch("");
-        setArchiveTypeFilter("all");
-        setTagFilter("");
-        setSortMode("lastModified-desc");
-        setIsCreatingEntity(false);
-        setCreateEntityType(sanitizedEntityTypes[0]?.id ?? "luogo");
-        setNewTag("");
-        setRelationType(RELATION_PRESETS[DEFAULT_RELATION_PRESET_INDEX]?.type ?? "");
-        setRelationInverseType(
-          RELATION_PRESETS[DEFAULT_RELATION_PRESET_INDEX]?.inverseType ?? ""
+        const mergedEntityTypes = mergeEntityTypesForImport(
+          currentEntityTypes,
+          importedEntityTypes
         );
-        setRelationTargetId("");
-        setGraphViewMode("focused");
-        setGraphFilter("all");
-        setGraphViewType("all");
-        setGraphViewTag("");
-        setTimelinePeriodFilter("all");
-        setGraphTypeFilters(buildDefaultGraphTypeFilters(sanitizedEntityTypes));
-        setIsFloatingCreateOpen(false);
 
-        alert("Import completato con successo.");
+        const nextEntities = [...currentEntities];
+        const idMap = new Map<string, string>();
+        const usedIds = new Set(nextEntities.map((entity) => entity.id));
+
+        const exactNameMap = new Map<string, Entity>();
+        const metadataMap = new Map<string, Entity>();
+
+        nextEntities.forEach((entity) => {
+          exactNameMap.set(
+            `${entity.type}::${normalizeEntityName(entity.name).toLowerCase()}`,
+            entity
+          );
+
+          const metadataFingerprint = normalizeMetadataFingerprint(entity.metadata);
+          if (metadataFingerprint !== "[]") {
+            metadataMap.set(`${entity.type}::${metadataFingerprint}`, entity);
+          }
+        });
+
+        importedEntities.forEach((importedEntity) => {
+          const normalizedNameKey = `${importedEntity.type}::${normalizeEntityName(
+            importedEntity.name
+          ).toLowerCase()}`;
+
+          const metadataFingerprint = normalizeMetadataFingerprint(importedEntity.metadata);
+          const metadataKey = `${importedEntity.type}::${metadataFingerprint}`;
+
+          const sameByName = exactNameMap.get(normalizedNameKey);
+          const sameByMetadata =
+            metadataFingerprint !== "[]" ? metadataMap.get(metadataKey) : undefined;
+
+          const matchedEntity = sameByName ?? sameByMetadata;
+
+          if (matchedEntity) {
+            const mergedEntity: Entity = {
+              ...matchedEntity,
+              shortDescription:
+                matchedEntity.shortDescription || importedEntity.shortDescription,
+              notes: matchedEntity.notes || importedEntity.notes,
+              image: matchedEntity.image || importedEntity.image,
+              tags: Array.from(new Set([...matchedEntity.tags, ...importedEntity.tags])),
+              metadata: {
+                ...(importedEntity.metadata ?? {}),
+                ...(matchedEntity.metadata ?? {}),
+              },
+              updatedAt: new Date().toISOString(),
+              lastModified: Date.now(),
+            };
+
+            const index = nextEntities.findIndex((entity) => entity.id === matchedEntity.id);
+            if (index >= 0) {
+              nextEntities[index] = mergedEntity;
+            }
+
+            exactNameMap.set(normalizedNameKey, mergedEntity);
+
+            if (metadataFingerprint !== "[]") {
+              metadataMap.set(metadataKey, mergedEntity);
+            }
+
+            idMap.set(importedEntity.id, matchedEntity.id);
+            return;
+          }
+
+          let nextId = importedEntity.id;
+          if (usedIds.has(nextId)) {
+            nextId = crypto.randomUUID();
+          }
+
+          const entityToInsert: Entity = {
+            ...importedEntity,
+            id: nextId,
+            name: hasDuplicateEntityName(nextEntities, importedEntity.type, importedEntity.name)
+              ? buildImportedEntityName(nextEntities, importedEntity)
+              : importedEntity.name,
+          };
+
+          usedIds.add(entityToInsert.id);
+          nextEntities.push(entityToInsert);
+          idMap.set(importedEntity.id, entityToInsert.id);
+
+          exactNameMap.set(
+            `${entityToInsert.type}::${normalizeEntityName(entityToInsert.name).toLowerCase()}`,
+            entityToInsert
+          );
+
+          const insertedFingerprint = normalizeMetadataFingerprint(entityToInsert.metadata);
+          if (insertedFingerprint !== "[]") {
+            metadataMap.set(`${entityToInsert.type}::${insertedFingerprint}`, entityToInsert);
+          }
+        });
+
+        const relationSignatureSet = new Set(
+          currentRelations.map((relation) =>
+            [
+              relation.fromEntityId,
+              relation.toEntityId,
+              normalizeRelationType(relation.type),
+              normalizeOptionalRelationType(relation.inverseType) ?? "",
+              relation.source ?? "",
+              relation.sourceFieldKey ?? "",
+            ].join("::")
+          )
+        );
+
+        const nextRelations = [...currentRelations];
+
+        importedRelations.forEach((relation) => {
+          const mappedFrom = idMap.get(relation.fromEntityId);
+          const mappedTo = idMap.get(relation.toEntityId);
+
+          if (!mappedFrom || !mappedTo) return;
+          if (mappedFrom === mappedTo) return;
+
+          const normalizedType = normalizeRelationType(relation.type);
+          const normalizedInverseType = normalizeOptionalRelationType(relation.inverseType);
+
+          const signature = [
+            mappedFrom,
+            mappedTo,
+            normalizedType,
+            normalizedInverseType ?? "",
+            relation.source ?? "",
+            relation.sourceFieldKey ?? "",
+          ].join("::");
+
+          if (relationSignatureSet.has(signature)) {
+            return;
+          }
+
+          relationSignatureSet.add(signature);
+          nextRelations.push({
+            ...relation,
+            id: crypto.randomUUID(),
+            fromEntityId: mappedFrom,
+            toEntityId: mappedTo,
+            type: normalizedType,
+            inverseType: normalizedInverseType,
+          });
+        });
+
+        setRawEntityTypes(mergedEntityTypes);
+        setRawEntities(nextEntities);
+        setRawRelations(nextRelations);
+
+        if (!selectedId && nextEntities.length > 0) {
+          setSelectedId(nextEntities[0].id);
+        }
+
+        setGraphTypeFilters(buildDefaultGraphTypeFilters(mergedEntityTypes));
+
+        alert("Import completato in modalità merge.");
       } catch (error) {
         console.error(error);
         alert("Impossibile importare il file. Controlla che sia un backup JSON valido.");
@@ -1882,6 +2685,7 @@ export default function App() {
   }
 
   function addTag() {
+
     if (!selectedEntity) return;
 
     const normalized = normalizeTag(newTag);
@@ -1925,6 +2729,57 @@ export default function App() {
     }
   }
 
+  function patchEntityMetadataById(entityId: string, metadataPatch: Record<string, string>) {
+    const normalizedPatch = Object.fromEntries(
+      Object.entries(metadataPatch)
+        .map(([key, value]) => [key, normalizeMetadataValue(value)] as const)
+        .filter(([key, value]) => key.trim() && value)
+    );
+
+    if (Object.keys(normalizedPatch).length === 0) return;
+
+    setRawEntities((current) =>
+      sanitizeEntities(current).map((entity) => {
+        if (entity.id !== entityId) return entity;
+
+        return {
+          ...entity,
+          metadata: {
+            ...(entity.metadata ?? {}),
+            ...normalizedPatch,
+          },
+          updatedAt: new Date().toISOString(),
+          lastModified: Date.now(),
+        };
+      })
+    );
+  }
+
+  function syncManualGenealogyMetadata(relation: Relation) {
+    const sourceEntity = entities.find((entity) => entity.id === relation.fromEntityId);
+    const targetEntity = entities.find((entity) => entity.id === relation.toEntityId);
+
+    if (!sourceEntity || !targetEntity) return;
+    if (sourceEntity.type !== "personaggio" || targetEntity.type !== "personaggio") return;
+
+    const normalizedType = normalizeRelationType(relation.type);
+
+    if (normalizedType === "padre di") {
+      patchEntityMetadataById(targetEntity.id, { padre: sourceEntity.name });
+      return;
+    }
+
+    if (normalizedType === "madre di") {
+      patchEntityMetadataById(targetEntity.id, { madre: sourceEntity.name });
+      return;
+    }
+
+    if (normalizedType === "coniuge di" || normalizedType === "partner di") {
+      patchEntityMetadataById(sourceEntity.id, { coniuge: targetEntity.name });
+      patchEntityMetadataById(targetEntity.id, { coniuge: sourceEntity.name });
+    }
+  }
+
   function addRelation() {
     if (!selectedEntity) return;
     if (relationTargetId === "") return;
@@ -1965,6 +2820,7 @@ export default function App() {
     };
 
     setRawRelations((current) => [newRelation, ...sanitizeRelations(current)]);
+    syncManualGenealogyMetadata(newRelation);
     setRelationType(RELATION_PRESETS[DEFAULT_RELATION_PRESET_INDEX]?.type ?? "");
     setRelationInverseType(
       RELATION_PRESETS[DEFAULT_RELATION_PRESET_INDEX]?.inverseType ?? ""

@@ -36,7 +36,7 @@ import { getEntityTypeLabel, getTypeColor } from "../utils/entity";
 export type GraphViewMode = "focused" | "global" | "type-only" | "tag-based";
 export type FocusedGraphFilter = "all" | "outgoing" | "incoming";
 export type GraphLayoutMode = "auto" | "free" | "map";
-type GraphClusterMode = "none" | "region" | "faction";
+type GraphClusterMode = "none" | "region" | "faction" | "genealogy";
 
 type ManualNodePosition = { x: number; y: number };
 type ManualNodePositionMap = Record<string, ManualNodePosition>;
@@ -117,7 +117,7 @@ function readStoredLayoutMode(): GraphLayoutMode {
 
 function readStoredClusterMode(): GraphClusterMode {
   const raw = safeStorageGet(GRAPH_CLUSTER_MODE_STORAGE_KEY);
-  return raw === "region" || raw === "faction" ? raw : "none";
+  return raw === "region" || raw === "faction" || raw === "genealogy" ? raw : "none";
 }
 
 function readStoredManualPositions(): ManualNodePositionMap {
@@ -193,6 +193,7 @@ function normalizeText(value: string): string {
     .toLowerCase();
 }
 
+
 function getClusterAccent(clusterMode: GraphClusterMode, label: string): string {
   if (clusterMode === "region") {
     const normalized = normalizeText(label);
@@ -201,11 +202,18 @@ function getClusterAccent(clusterMode: GraphClusterMode, label: string): string 
     if (normalized.includes("rovine")) return "#f59e0b";
     if (normalized.includes("mont")) return "#94a3b8";
     if (normalized.includes("isola")) return "#38bdf8";
+    if (normalized.includes("citt") || normalized.includes("porto")) return "#60a5fa";
     return "#34d399";
   }
 
   if (clusterMode === "faction") {
     const palette = ["#c084fc", "#f472b6", "#60a5fa", "#f59e0b", "#34d399", "#fb7185"];
+    const index = Array.from(label).reduce((acc, char) => acc + char.charCodeAt(0), 0) % palette.length;
+    return palette[index];
+  }
+
+  if (clusterMode === "genealogy") {
+    const palette = ["#f59e0b", "#fb7185", "#c084fc", "#60a5fa", "#34d399", "#f97316"];
     const index = Array.from(label).reduce((acc, char) => acc + char.charCodeAt(0), 0) % palette.length;
     return palette[index];
   }
@@ -227,38 +235,556 @@ function pickFirstMetadataValue(entity: Entity | undefined, keys: string[]): str
   return "";
 }
 
-function getClusterKey(entity: Entity | undefined, clusterMode: GraphClusterMode): string {
-  if (!entity || clusterMode === "none") return "Tutto";
 
-  if (clusterMode === "region") {
-    const region = pickFirstMetadataValue(entity, [
-      "regione",
-      "region",
-      "area",
-      "zona",
-      "territorio",
-      "territory",
-      "bioma",
-      "macroarea",
-      "macro-area",
-      "district",
-    ]);
-    return region || "Area non definita";
+
+function normalizeRelationLabel(value: string | undefined): string {
+  return normalizeText(value ?? "");
+}
+
+function isPlaceEntity(entity: Entity | undefined): boolean {
+  return normalizeText(entity?.type ?? "").includes("luog");
+}
+
+function isCharacterEntity(entity: Entity | undefined): boolean {
+  const normalized = normalizeText(entity?.type ?? "");
+  return normalized.includes("person") || normalized.includes("char") || normalized.includes("npc");
+}
+
+function extractEdgeRelationLabel(edge: Edge): string {
+  if (typeof edge.label === "string") return edge.label;
+  if (edge.data && typeof edge.data === "object" && "relationLabel" in edge.data) {
+    const maybe = (edge.data as { relationLabel?: unknown }).relationLabel;
+    return typeof maybe === "string" ? maybe : "";
+  }
+  if (edge.data && typeof edge.data === "object" && "label" in edge.data) {
+    const maybe = (edge.data as { label?: unknown }).label;
+    return typeof maybe === "string" ? maybe : "";
+  }
+  return "";
+}
+
+type GraphRelationshipEdge = {
+  sourceId: string;
+  targetId: string;
+  relationLabel: string;
+};
+
+type ClusterComputationContext = {
+  entitiesById: Map<string, Entity>;
+  outgoingById: Map<string, GraphRelationshipEdge[]>;
+  incomingById: Map<string, GraphRelationshipEdge[]>;
+};
+
+
+type GenealogyTreeData = {
+  parentIdsById: Record<string, string[]>;
+  childIdsById: Record<string, string[]>;
+  partnerIdsById: Record<string, string[]>;
+};
+
+function buildClusterComputationContext(
+  nodes: Node[],
+  edges: Edge[],
+  getEntityById: (id: string) => Entity | undefined
+): ClusterComputationContext {
+  const entitiesById = new Map<string, Entity>();
+  nodes.forEach((node) => {
+    const entity = getEntityById(String(node.id));
+    if (entity) {
+      entitiesById.set(String(node.id), entity);
+    }
+  });
+
+  const outgoingById = new Map<string, GraphRelationshipEdge[]>();
+  const incomingById = new Map<string, GraphRelationshipEdge[]>();
+
+  const register = (
+    map: Map<string, GraphRelationshipEdge[]>,
+    key: string,
+    value: GraphRelationshipEdge
+  ) => {
+    const current = map.get(key) ?? [];
+    current.push(value);
+    map.set(key, current);
+  };
+
+  edges.forEach((edge) => {
+    const relationLabel = extractEdgeRelationLabel(edge);
+    const item: GraphRelationshipEdge = {
+      sourceId: String(edge.source),
+      targetId: String(edge.target),
+      relationLabel,
+    };
+    register(outgoingById, item.sourceId, item);
+    register(incomingById, item.targetId, item);
+  });
+
+  return { entitiesById, outgoingById, incomingById };
+}
+
+const PLACE_PARENT_RELATIONS = [
+  "si trova in",
+  "si trova dentro",
+  "fa parte di",
+  "appartiene a",
+  "dentro",
+  "in",
+];
+
+const PLACE_CHILD_RELATIONS = [
+  "contiene",
+  "include",
+  "ospita",
+];
+
+const ENTITY_TO_PLACE_RELATIONS = [
+  "abita in",
+  "vive in",
+  "si trova in",
+  "si svolge in",
+  "ha luogo in",
+  "proviene da",
+  "origine",
+  "originario di",
+  "controlla",
+  "territorio",
+];
+
+const GENEALOGY_RELATION_HINTS = [
+  "padre",
+  "madre",
+  "genitore",
+  "figlio",
+  "figlia",
+  "figli",
+  "discende",
+  "discendente",
+  "coniuge",
+  "sposa",
+  "sposo",
+  "partner",
+  "marito",
+  "moglie",
+  "fratello",
+  "sorella",
+  "fratell",
+  "sorell",
+  "famiglia",
+  "casata",
+  "parente",
+];
+
+function relationLabelMatches(label: string, candidates: string[]): boolean {
+  const normalized = normalizeRelationLabel(label);
+  return candidates.some((candidate) => normalized.includes(normalizeRelationLabel(candidate)));
+}
+
+function getDirectParentPlaceId(placeId: string, context: ClusterComputationContext): string | null {
+  const outgoing = context.outgoingById.get(placeId) ?? [];
+  for (const edge of outgoing) {
+    const targetEntity = context.entitiesById.get(edge.targetId);
+    if (!isPlaceEntity(targetEntity)) continue;
+    if (relationLabelMatches(edge.relationLabel, PLACE_PARENT_RELATIONS)) {
+      return edge.targetId;
+    }
   }
 
-  const faction = pickFirstMetadataValue(entity, [
-    "fazione",
-    "faction",
-    "clan",
-    "tribù",
-    "tribu",
-    "tribe",
-    "organizzazione",
-    "organization",
-    "casata",
-    "ordine",
+  const incoming = context.incomingById.get(placeId) ?? [];
+  for (const edge of incoming) {
+    const sourceEntity = context.entitiesById.get(edge.sourceId);
+    if (!isPlaceEntity(sourceEntity)) continue;
+    if (relationLabelMatches(edge.relationLabel, PLACE_CHILD_RELATIONS)) {
+      return edge.sourceId;
+    }
+  }
+
+  return null;
+}
+
+function resolveRootPlaceId(placeId: string, context: ClusterComputationContext): string {
+  const visited = new Set<string>();
+  let currentId = placeId;
+
+  while (!visited.has(currentId)) {
+    visited.add(currentId);
+    const parentId = getDirectParentPlaceId(currentId, context);
+    if (!parentId) {
+      return currentId;
+    }
+    currentId = parentId;
+  }
+
+  return currentId;
+}
+
+function findBestPlaceForEntity(entityId: string, context: ClusterComputationContext): string | null {
+  const entity = context.entitiesById.get(entityId);
+  if (!entity) return null;
+
+  if (isPlaceEntity(entity)) {
+    return entity.id;
+  }
+
+  const outgoing = context.outgoingById.get(entityId) ?? [];
+  for (const edge of outgoing) {
+    const targetEntity = context.entitiesById.get(edge.targetId);
+    if (!isPlaceEntity(targetEntity)) continue;
+    if (relationLabelMatches(edge.relationLabel, ENTITY_TO_PLACE_RELATIONS)) {
+      return edge.targetId;
+    }
+  }
+
+  const incoming = context.incomingById.get(entityId) ?? [];
+  for (const edge of incoming) {
+    const sourceEntity = context.entitiesById.get(edge.sourceId);
+    if (!isPlaceEntity(sourceEntity)) continue;
+    if (relationLabelMatches(edge.relationLabel, PLACE_CHILD_RELATIONS)) {
+      return edge.sourceId;
+    }
+  }
+
+  return null;
+}
+
+function resolveRegionClusterLabel(entityId: string, context: ClusterComputationContext): string {
+  const entity = context.entitiesById.get(entityId);
+  if (!entity) return "Area non definita";
+
+  const directRegion = pickFirstMetadataValue(entity, [
+    "regione",
+    "region",
+    "area",
+    "zona",
+    "territorio",
+    "territory",
+    "bioma",
+    "macroarea",
+    "macro-area",
+    "district",
   ]);
-  return faction || "Fazione non definita";
+
+  const placeId = findBestPlaceForEntity(entityId, context);
+  if (placeId) {
+    const rootPlaceId = resolveRootPlaceId(placeId, context);
+    const rootPlace = context.entitiesById.get(rootPlaceId);
+    if (rootPlace?.name?.trim()) {
+      return rootPlace.name.trim();
+    }
+  }
+
+  return directRegion || "Area non definita";
+}
+
+function isGenealogyRelation(edge: GraphRelationshipEdge, context: ClusterComputationContext): boolean {
+  const sourceEntity = context.entitiesById.get(edge.sourceId);
+  const targetEntity = context.entitiesById.get(edge.targetId);
+  if (!isCharacterEntity(sourceEntity) || !isCharacterEntity(targetEntity)) {
+    return false;
+  }
+
+  return relationLabelMatches(edge.relationLabel, GENEALOGY_RELATION_HINTS);
+}
+
+function buildGenealogyClusterMap(context: ClusterComputationContext): Record<string, string> {
+  const characterIds = Array.from(context.entitiesById.values())
+    .filter((entity) => isCharacterEntity(entity))
+    .map((entity) => entity.id);
+
+  if (characterIds.length === 0) return {};
+
+  const adjacency = new Map<string, Set<string>>();
+  const ensure = (id: string) => {
+    if (!adjacency.has(id)) adjacency.set(id, new Set());
+    return adjacency.get(id)!;
+  };
+
+  characterIds.forEach((id) => ensure(id));
+
+  const allEdges = new Set<GraphRelationshipEdge>();
+  context.outgoingById.forEach((items) => items.forEach((item) => allEdges.add(item)));
+
+  Array.from(allEdges).forEach((edge) => {
+    if (!isGenealogyRelation(edge, context)) return;
+    ensure(edge.sourceId).add(edge.targetId);
+    ensure(edge.targetId).add(edge.sourceId);
+  });
+
+  const labelsById: Record<string, string> = {};
+  const visited = new Set<string>();
+
+  characterIds.forEach((startId) => {
+    if (visited.has(startId)) return;
+
+    const queue = [startId];
+    const component: string[] = [];
+    visited.add(startId);
+
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      component.push(currentId);
+
+      const neighbors = adjacency.get(currentId) ?? new Set<string>();
+      neighbors.forEach((neighborId) => {
+        if (visited.has(neighborId)) return;
+        visited.add(neighborId);
+        queue.push(neighborId);
+      });
+    }
+
+    const namedEntities = component
+      .map((id) => context.entitiesById.get(id))
+      .filter((entity): entity is Entity => Boolean(entity))
+      .sort((a, b) => a.name.localeCompare(b.name, "it", { sensitivity: "base" }));
+
+    const anchor = namedEntities[0];
+    const label =
+      component.length <= 1
+        ? `Linea di ${anchor?.name ?? "personaggio"}`
+        : `Albero di ${anchor?.name ?? "famiglia"}`;
+
+    component.forEach((id) => {
+      labelsById[id] = label;
+    });
+  });
+
+  return labelsById;
+}
+
+function buildClusterKeyMap(
+  clusterMode: GraphClusterMode,
+  context: ClusterComputationContext
+): Record<string, string> {
+  const labelsById: Record<string, string> = {};
+
+  if (clusterMode === "none") {
+    context.entitiesById.forEach((_, entityId) => {
+      labelsById[entityId] = "Tutto";
+    });
+    return labelsById;
+  }
+
+  if (clusterMode === "region") {
+    context.entitiesById.forEach((_, entityId) => {
+      labelsById[entityId] = resolveRegionClusterLabel(entityId, context);
+    });
+    return labelsById;
+  }
+
+  if (clusterMode === "genealogy") {
+    const genealogyLabels = buildGenealogyClusterMap(context);
+    context.entitiesById.forEach((entity, entityId) => {
+      labelsById[entityId] =
+        genealogyLabels[entityId] ??
+        (isCharacterEntity(entity) ? `Linea di ${entity.name}` : "Fuori genealogia");
+    });
+    return labelsById;
+  }
+
+  context.entitiesById.forEach((entity, entityId) => {
+    labelsById[entityId] =
+      pickFirstMetadataValue(entity, [
+        "fazione",
+        "faction",
+        "clan",
+        "tribù",
+        "tribu",
+        "tribe",
+        "organizzazione",
+        "organization",
+        "casata",
+        "ordine",
+      ]) || "Fazione non definita";
+  });
+
+  return labelsById;
+}
+
+function getUniqueSortedIds(values: string[]): string[] {
+  return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b, "it", { sensitivity: "base" }));
+}
+
+function buildGenealogyTreeData(context: ClusterComputationContext): GenealogyTreeData {
+  const parentIdsById: Record<string, string[]> = {};
+  const childIdsById: Record<string, string[]> = {};
+  const partnerIdsById: Record<string, string[]> = {};
+
+  const pushPair = (record: Record<string, string[]>, key: string, value: string) => {
+    record[key] = record[key] ?? [];
+    record[key].push(value);
+  };
+
+  const allEdges = new Set<GraphRelationshipEdge>();
+  context.outgoingById.forEach((items) => items.forEach((item) => allEdges.add(item)));
+
+  Array.from(allEdges).forEach((edge) => {
+    if (!isGenealogyRelation(edge, context)) return;
+
+    const normalized = normalizeRelationLabel(edge.relationLabel);
+
+    const isPartner = ["coniuge", "partner", "moglie", "marito", "sposa", "sposo"].some((hint) =>
+      normalized.includes(hint)
+    );
+
+    if (isPartner) {
+      pushPair(partnerIdsById, edge.sourceId, edge.targetId);
+      pushPair(partnerIdsById, edge.targetId, edge.sourceId);
+      return;
+    }
+
+    let parentId = edge.sourceId;
+    let childId = edge.targetId;
+
+    const childFirstHints = ["figlio", "figlia", "figli", "discende", "discendente"];
+    const parentFirstHints = ["padre", "madre", "genitore"];
+
+    if (childFirstHints.some((hint) => normalized.includes(hint))) {
+      parentId = edge.targetId;
+      childId = edge.sourceId;
+    } else if (!parentFirstHints.some((hint) => normalized.includes(hint))) {
+      parentId = edge.sourceId;
+      childId = edge.targetId;
+    }
+
+    pushPair(parentIdsById, childId, parentId);
+    pushPair(childIdsById, parentId, childId);
+  });
+
+  Object.keys(parentIdsById).forEach((key) => {
+    parentIdsById[key] = getUniqueSortedIds(parentIdsById[key] ?? []);
+  });
+  Object.keys(childIdsById).forEach((key) => {
+    childIdsById[key] = getUniqueSortedIds(childIdsById[key] ?? []);
+  });
+  Object.keys(partnerIdsById).forEach((key) => {
+    partnerIdsById[key] = getUniqueSortedIds(partnerIdsById[key] ?? []);
+  });
+
+  return { parentIdsById, childIdsById, partnerIdsById };
+}
+
+function buildGeographicClusterLayout(
+  clusterNodes: Node<GraphNodeData>[],
+  layoutMode: GraphLayoutMode
+): { positions: ManualNodePositionMap; width: number; height: number } {
+  const columns = Math.max(2, Math.ceil(Math.sqrt(clusterNodes.length * 1.8)));
+  const spacingX = layoutMode === "map" ? 560 : 500;
+  const spacingY = layoutMode === "map" ? 290 : 250;
+  const positions: ManualNodePositionMap = {};
+
+  clusterNodes.forEach((node, index) => {
+    const shape = getNodeShape(node.data.entityType);
+    const col = index % columns;
+    const row = Math.floor(index / columns);
+    const centeredX = col * spacingX - ((columns - 1) * spacingX) / 2;
+    const staggerX = row % 2 === 0 ? 0 : 42;
+    let localX = centeredX + staggerX;
+    let localY = row * spacingY;
+
+    if (shape.orientation === "wide") localY -= 38;
+    if (shape.orientation === "badge") localX += 28;
+    if (shape.orientation === "compact") localY += 24;
+    if (shape.orientation === "timeline") localX -= 18;
+
+    positions[String(node.id)] = { x: localX, y: localY };
+  });
+
+  const relaxed = relaxNodePositions(clusterNodes, positions, 110);
+  const maxWidth = Math.max(...clusterNodes.map((node) => getNodeShape(node.data.entityType).width));
+  const maxHeight = Math.max(...clusterNodes.map((node) => getNodeShape(node.data.entityType).minHeight));
+  const rows = Math.max(1, Math.ceil(clusterNodes.length / columns));
+
+  return {
+    positions: relaxed,
+    width: Math.max(760, (columns - 1) * spacingX + maxWidth + 320),
+    height: Math.max(420, (rows - 1) * spacingY + maxHeight + 220),
+  };
+}
+
+function buildGenealogyClusterLayout(
+  clusterNodes: Node<GraphNodeData>[],
+  genealogyTree: GenealogyTreeData | undefined
+): { positions: ManualNodePositionMap; width: number; height: number } {
+  const positions: ManualNodePositionMap = {};
+  const nodeIds = new Set(clusterNodes.map((node) => String(node.id)));
+  const nodesById = new Map(clusterNodes.map((node) => [String(node.id), node] as const));
+  const parentIdsById = genealogyTree?.parentIdsById ?? {};
+  const childIdsById = genealogyTree?.childIdsById ?? {};
+  const partnerIdsById = genealogyTree?.partnerIdsById ?? {};
+
+  const depthMemo = new Map<string, number>();
+  const visiting = new Set<string>();
+
+  const getDepth = (id: string): number => {
+    if (depthMemo.has(id)) return depthMemo.get(id) ?? 0;
+    if (visiting.has(id)) return 0;
+    visiting.add(id);
+    const parents = (parentIdsById[id] ?? []).filter((parentId) => nodeIds.has(parentId));
+    const depth = parents.length === 0 ? 0 : Math.max(...parents.map((parentId) => getDepth(parentId) + 1));
+    visiting.delete(id);
+    depthMemo.set(id, depth);
+    return depth;
+  };
+
+  clusterNodes.forEach((node) => {
+    getDepth(String(node.id));
+  });
+
+  const levelMap = new Map<number, string[]>();
+  clusterNodes.forEach((node) => {
+    const id = String(node.id);
+    const depth = depthMemo.get(id) ?? 0;
+    const bucket = levelMap.get(depth) ?? [];
+    bucket.push(id);
+    levelMap.set(depth, bucket);
+  });
+
+  const levels = Array.from(levelMap.keys()).sort((a, b) => a - b);
+  const horizontalSpacing = 290;
+  const verticalSpacing = 260;
+  let maxRowWidth = 0;
+
+  levels.forEach((level) => {
+    const ids = (levelMap.get(level) ?? []).sort((a, b) => {
+      const aPartners = (partnerIdsById[a] ?? []).filter((partnerId) => nodeIds.has(partnerId)).join("|");
+      const bPartners = (partnerIdsById[b] ?? []).filter((partnerId) => nodeIds.has(partnerId)).join("|");
+      const aChildren = (childIdsById[a] ?? []).filter((childId) => nodeIds.has(childId)).length;
+      const bChildren = (childIdsById[b] ?? []).filter((childId) => nodeIds.has(childId)).length;
+      if (aPartners !== bPartners) return aPartners.localeCompare(bPartners, "it");
+      if (aChildren !== bChildren) return bChildren - aChildren;
+      const aName = nodesById.get(a)?.data.name ?? a;
+      const bName = nodesById.get(b)?.data.name ?? b;
+      return aName.localeCompare(bName, "it", { sensitivity: "base" });
+    });
+
+    const placed = new Set<string>();
+    const ordered: string[] = [];
+    ids.forEach((id) => {
+      if (placed.has(id)) return;
+      ordered.push(id);
+      placed.add(id);
+      const partner = (partnerIdsById[id] ?? []).find((partnerId) => ids.includes(partnerId) && !placed.has(partnerId));
+      if (partner) {
+        ordered.push(partner);
+        placed.add(partner);
+      }
+    });
+
+    const rowWidth = Math.max(0, (ordered.length - 1) * horizontalSpacing);
+    maxRowWidth = Math.max(maxRowWidth, rowWidth);
+
+    ordered.forEach((id, index) => {
+      const x = index * horizontalSpacing - rowWidth / 2;
+      const y = level * verticalSpacing;
+      positions[id] = { x, y };
+    });
+  });
+
+  const relaxed = relaxNodePositions(clusterNodes, positions, 40);
+  return {
+    positions: relaxed,
+    width: Math.max(760, maxRowWidth + 520),
+    height: Math.max(480, Math.max(1, levels.length) * verticalSpacing + 220),
+  };
 }
 
 function getTypeGlyph(entityType: EntityType) {
@@ -636,65 +1162,241 @@ const graphCanvasStyle: React.CSSProperties = {
   boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
 };
 
+function getEntityTypeLayoutPriority(entityType: EntityType): number {
+  const normalized = normalizeText(entityType);
+  if (normalized.includes("luog") || normalized.includes("place") || normalized.includes("region")) return 0;
+  if (normalized.includes("person") || normalized.includes("char") || normalized.includes("npc")) return 1;
+  if (normalized.includes("fazi") || normalized.includes("faction") || normalized.includes("clan")) return 2;
+  if (normalized.includes("ogg") || normalized.includes("item") || normalized.includes("artifact")) return 3;
+  if (normalized.includes("event") || normalized.includes("evento")) return 4;
+  return 5;
+}
+
+function estimateClusterColumns(nodeCount: number, clusterMode: GraphClusterMode) {
+  if (clusterMode === "genealogy") {
+    return Math.max(2, Math.ceil(Math.sqrt(nodeCount)));
+  }
+  if (clusterMode === "region") {
+    return Math.max(2, Math.ceil(Math.sqrt(nodeCount * 0.85)));
+  }
+  return Math.max(1, Math.ceil(Math.sqrt(nodeCount)));
+}
+
+function relaxNodePositions(
+  nodes: Node<GraphNodeData>[],
+  positions: ManualNodePositionMap,
+  iterations = 80
+): ManualNodePositionMap {
+  if (nodes.length <= 1) return positions;
+
+  const next: ManualNodePositionMap = Object.fromEntries(
+    Object.entries(positions).map(([id, pos]) => [id, { ...pos }])
+  );
+
+  const getGapX = (a: Node<GraphNodeData>, b: Node<GraphNodeData>) => {
+    const hasWide = getNodeShape(a.data.entityType).orientation === "wide" || getNodeShape(b.data.entityType).orientation === "wide";
+    return hasWide ? 90 : 72;
+  };
+
+  const getGapY = (a: Node<GraphNodeData>, b: Node<GraphNodeData>) => {
+    const tallPair = getNodeShape(a.data.entityType).orientation === "tall" || getNodeShape(b.data.entityType).orientation === "tall";
+    return tallPair ? 78 : 56;
+  };
+
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    let changed = false;
+
+    for (let index = 0; index < nodes.length; index += 1) {
+      const a = nodes[index];
+      const shapeA = getNodeShape(a.data.entityType);
+      const posA = next[String(a.id)];
+      if (!posA) continue;
+
+      for (let innerIndex = index + 1; innerIndex < nodes.length; innerIndex += 1) {
+        const b = nodes[innerIndex];
+        const shapeB = getNodeShape(b.data.entityType);
+        const posB = next[String(b.id)];
+        if (!posB) continue;
+
+        const gapX = getGapX(a, b);
+        const gapY = getGapY(a, b);
+        const centerAX = posA.x + shapeA.width / 2;
+        const centerAY = posA.y + shapeA.minHeight / 2;
+        const centerBX = posB.x + shapeB.width / 2;
+        const centerBY = posB.y + shapeB.minHeight / 2;
+        const requiredX = shapeA.width / 2 + shapeB.width / 2 + gapX;
+        const requiredY = shapeA.minHeight / 2 + shapeB.minHeight / 2 + gapY;
+        const dx = centerBX - centerAX;
+        const dy = centerBY - centerAY;
+        const overlapX = requiredX - Math.abs(dx);
+        const overlapY = requiredY - Math.abs(dy);
+
+        if (overlapX <= 0 || overlapY <= 0) continue;
+
+        changed = true;
+        if (overlapX < overlapY) {
+          const push = overlapX / 2 + 2;
+          const direction = dx === 0 ? (index % 2 === 0 ? -1 : 1) : Math.sign(dx);
+          posA.x -= push * direction;
+          posB.x += push * direction;
+        } else {
+          const push = overlapY / 2 + 2;
+          const direction = dy === 0 ? (innerIndex % 2 === 0 ? -1 : 1) : Math.sign(dy);
+          posA.y -= push * direction;
+          posB.y += push * direction;
+        }
+      }
+    }
+
+    if (!changed) break;
+  }
+
+  return next;
+}
+
 function buildClusteredPositions(
   nodes: Node<GraphNodeData>[],
-  entitiesById: Map<string, Entity>,
+  clusterKeyById: Record<string, string>,
   layoutMode: GraphLayoutMode,
-  clusterMode: GraphClusterMode
+  clusterMode: GraphClusterMode,
+  selectedEntityId?: string,
+  genealogyTree?: GenealogyTreeData
 ): ManualNodePositionMap {
   if (!nodes.length) return {};
 
   const clusterMap = new Map<string, Node<GraphNodeData>[]>();
   nodes.forEach((node) => {
-    const clusterKey = getClusterKey(entitiesById.get(String(node.id)), clusterMode);
+    const clusterKey = clusterKeyById[String(node.id)] ?? "Tutto";
     const bucket = clusterMap.get(clusterKey) ?? [];
     bucket.push(node);
     clusterMap.set(clusterKey, bucket);
   });
 
-  const clusterKeys = Array.from(clusterMap.keys());
-  const clusterColumns = Math.max(1, Math.ceil(Math.sqrt(clusterKeys.length)));
-  const clusterSpacingX = layoutMode === "map" ? 1160 : 980;
-  const clusterSpacingY = layoutMode === "map" ? 900 : 760;
+  const clusterKeys = Array.from(clusterMap.keys()).sort((a, b) => {
+    const aHasSelection = (clusterMap.get(a) ?? []).some((node) => String(node.id) === selectedEntityId);
+    const bHasSelection = (clusterMap.get(b) ?? []).some((node) => String(node.id) === selectedEntityId);
+    if (aHasSelection && !bHasSelection) return -1;
+    if (!aHasSelection && bHasSelection) return 1;
+    return a.localeCompare(b, "it", { sensitivity: "base" });
+  });
+
+  const clusterColumns = clusterMode === "region"
+    ? Math.max(1, Math.ceil(Math.sqrt(clusterKeys.length * 1.8)))
+    : clusterMode === "genealogy"
+    ? Math.max(1, Math.ceil(Math.sqrt(clusterKeys.length * 0.75)))
+    : Math.max(1, Math.ceil(Math.sqrt(clusterKeys.length)));
   const positions: ManualNodePositionMap = {};
+  const clusterBounds = new Map<string, { width: number; height: number }>();
+
+  clusterKeys.forEach((key) => {
+    const clusterNodes = [...(clusterMap.get(key) ?? [])].sort((a, b) => {
+      const aSelected = String(a.id) === selectedEntityId;
+      const bSelected = String(b.id) === selectedEntityId;
+      if (aSelected && !bSelected) return -1;
+      if (!aSelected && bSelected) return 1;
+
+      const typePriority =
+        getEntityTypeLayoutPriority(a.data.entityType) -
+        getEntityTypeLayoutPriority(b.data.entityType);
+      if (typePriority !== 0) return typePriority;
+
+      return a.data.name.localeCompare(b.data.name, "it", { sensitivity: "base" });
+    });
+
+    const clusterLayout =
+      clusterMode === "genealogy"
+        ? buildGenealogyClusterLayout(clusterNodes, genealogyTree)
+        : clusterMode === "region"
+        ? buildGeographicClusterLayout(clusterNodes, layoutMode)
+        : (() => {
+            const columns = estimateClusterColumns(clusterNodes.length, clusterMode);
+            const baseSpacingX = layoutMode === "map" ? 500 : 430;
+            const baseSpacingY = layoutMode === "map" ? 360 : 300;
+            const spacingX = baseSpacingX;
+            const spacingY = baseSpacingY;
+            const rows = Math.max(1, Math.ceil(clusterNodes.length / columns));
+            const maxWidth = Math.max(...clusterNodes.map((node) => getNodeShape(node.data.entityType).width));
+            const maxHeight = Math.max(...clusterNodes.map((node) => getNodeShape(node.data.entityType).minHeight));
+            const localPositions: ManualNodePositionMap = {};
+
+            clusterNodes.forEach((node, index) => {
+              const shape = getNodeShape(node.data.entityType);
+              const col = index % columns;
+              const row = Math.floor(index / columns);
+              const centeredX = col * spacingX - ((columns - 1) * spacingX) / 2;
+              const staggerX = row % 2 === 0 ? 0 : 36;
+              let localX = centeredX + staggerX;
+              let localY = row * spacingY;
+
+              if (layoutMode === "map") {
+                if (shape.orientation === "wide") localY -= 60;
+                if (shape.orientation === "badge") localX += 44;
+                if (shape.orientation === "compact") localY += 44;
+                if (shape.orientation === "timeline") localX -= 32;
+              }
+
+              localPositions[String(node.id)] = { x: localX, y: localY };
+            });
+
+            return {
+              positions: relaxNodePositions(clusterNodes, localPositions, 90),
+              width: Math.max(560, (columns - 1) * spacingX + maxWidth + 240),
+              height: Math.max(420, (rows - 1) * spacingY + maxHeight + 220),
+            };
+          })();
+
+    clusterBounds.set(key, { width: clusterLayout.width, height: clusterLayout.height });
+    clusterNodes.forEach((node) => {
+      positions[String(node.id)] = clusterLayout.positions[String(node.id)];
+    });
+  });
+
+  const clusterGapX = clusterMode === "region" ? (layoutMode === "map" ? 420 : 360) : layoutMode === "map" ? 360 : 300;
+  const clusterGapY = clusterMode === "genealogy" ? (layoutMode === "map" ? 380 : 320) : layoutMode === "map" ? 320 : 250;
 
   clusterKeys.forEach((key, clusterIndex) => {
     const clusterNodes = clusterMap.get(key) ?? [];
     const clusterCol = clusterIndex % clusterColumns;
     const clusterRow = Math.floor(clusterIndex / clusterColumns);
-    const centerX = clusterCol * clusterSpacingX;
-    const centerY = clusterRow * clusterSpacingY;
-    const columns = Math.max(1, Math.ceil(Math.sqrt(clusterNodes.length)));
-    const spacingX = layoutMode === "map" ? 360 : 320;
-    const spacingY = layoutMode === "map" ? 260 : 230;
 
-    clusterNodes.forEach((node, index) => {
-      const shape = getNodeShape(node.data.entityType);
-      const col = index % columns;
-      const row = Math.floor(index / columns);
-      const width = (columns - 1) * spacingX;
+    const rowKeys = clusterKeys.filter((_, index) => Math.floor(index / clusterColumns) === clusterRow);
+    const colKeys = clusterKeys.filter((_, index) => index % clusterColumns === clusterCol);
 
-      let localX = centerX + col * spacingX - width / 2;
-      let localY = centerY + row * spacingY;
+    const offsetX = rowKeys
+      .slice(0, rowKeys.indexOf(key))
+      .reduce((acc, currentKey) => acc + (clusterBounds.get(currentKey)?.width ?? 760) + clusterGapX, 0);
+    const offsetY = colKeys
+      .slice(0, colKeys.indexOf(key))
+      .reduce((acc, currentKey) => acc + (clusterBounds.get(currentKey)?.height ?? 520) + clusterGapY, 0);
 
-      if (layoutMode === "map") {
-        if (shape.orientation === "wide") localY -= 70;
-        if (shape.orientation === "badge") localX += 50;
-        if (shape.orientation === "compact") localY += 70;
-        if (shape.orientation === "timeline") localX -= 40;
-      }
-
-      positions[String(node.id)] = { x: localX, y: localY };
+    clusterNodes.forEach((node) => {
+      const next = positions[String(node.id)];
+      if (!next) return;
+      positions[String(node.id)] = {
+        x: next.x + offsetX,
+        y: next.y + offsetY,
+      };
     });
+
+    if (clusterIndex === 0) {
+      clusterNodes.forEach((node) => {
+        const next = positions[String(node.id)];
+        if (!next) return;
+        positions[String(node.id)] = {
+          x: next.x + 120,
+          y: next.y + 80,
+        };
+      });
+    }
   });
 
-  return positions;
+  return relaxNodePositions(nodes, positions, 120);
 }
 
 function buildClusterBackgroundNodes(
   nodes: Node<GraphNodeData>[],
   positions: ManualNodePositionMap,
-  entitiesById: Map<string, Entity>,
+  clusterKeyById: Record<string, string>,
   layoutMode: GraphLayoutMode,
   clusterMode: GraphClusterMode
 ): Array<Node<ClusterBackgroundData>> {
@@ -702,7 +1404,7 @@ function buildClusterBackgroundNodes(
 
   const grouped = new Map<string, Node<GraphNodeData>[]>();
   nodes.forEach((node) => {
-    const clusterKey = getClusterKey(entitiesById.get(String(node.id)), clusterMode);
+    const clusterKey = clusterKeyById[String(node.id)] ?? "Tutto";
     const bucket = grouped.get(clusterKey) ?? [];
     bucket.push(node);
     grouped.set(clusterKey, bucket);
@@ -745,7 +1447,12 @@ function buildClusterBackgroundNodes(
       data: {
         label,
         accentColor,
-        subtitle: clusterMode === "region" ? "area geografica" : "gruppo sociale o politico",
+        subtitle:
+          clusterMode === "region"
+            ? "macro-area geografica derivata dalla gerarchia dei luoghi"
+            : clusterMode === "genealogy"
+            ? "albero genealogico o ramo familiare"
+            : "gruppo sociale o politico",
       },
     } as Node<ClusterBackgroundData>;
   });
@@ -808,33 +1515,30 @@ export default function GraphPanel({
 
   const visibleGraphData = useMemo(() => {
     const query = graphSearch.trim().toLowerCase();
-
-    const entitiesById = new Map<string, Entity>();
-    graphData.nodes.forEach((node) => {
-      const entity = getEntityById(String(node.id));
-      if (entity) entitiesById.set(String(node.id), entity);
-    });
+    const clusterContext = buildClusterComputationContext(
+      graphData.nodes,
+      graphData.edges,
+      getEntityById
+    );
+    const clusterKeyById = buildClusterKeyMap(graphClusterMode, clusterContext);
+    const genealogyTree = buildGenealogyTreeData(clusterContext);
 
     const baseNodes = graphData.nodes.map((node) => {
-      const entity = entitiesById.get(String(node.id));
+      const entity = clusterContext.entitiesById.get(String(node.id));
       const typeLabel = entity ? getEntityTypeLabel(entity.type, entityTypes) : "Entità";
       const accentColor = entity ? getTypeColor(entity.type, entityTypes) : "#64748b";
-      const clusterLabel =
-        graphClusterMode === "region"
-          ? getClusterKey(entity, "region")
-          : graphClusterMode === "faction"
-          ? getClusterKey(entity, "faction")
-          : pickFirstMetadataValue(entity, ["regione", "region", "fazione", "faction", "clan"]);
+      const clusterLabel = clusterKeyById[String(node.id)] ?? undefined;
 
+      const incomingData = (node.data ?? {}) as Partial<GraphNodeData>;
       const data: GraphNodeData = {
-        label: entity?.name ?? String(node.id),
-        name: entity?.name ?? String(node.id),
-        entityType: entity?.type ?? "entity",
-        typeLabel,
-        shortDescription: entity?.shortDescription ?? "",
-        iconGlyph: getTypeGlyph(entity?.type ?? "entity"),
-        accentColor,
-        metaLabel: clusterLabel || undefined,
+        label: entity?.name ?? incomingData.label ?? String(node.id),
+        name: entity?.name ?? incomingData.name ?? String(node.id),
+        entityType: entity?.type ?? incomingData.entityType ?? "entity",
+        typeLabel: incomingData.typeLabel ?? typeLabel,
+        shortDescription: entity?.shortDescription ?? incomingData.shortDescription ?? "",
+        iconGlyph: incomingData.iconGlyph ?? getTypeGlyph(entity?.type ?? "entity"),
+        accentColor: incomingData.accentColor ?? accentColor,
+        metaLabel: incomingData.metaLabel ?? clusterLabel ?? undefined,
       };
 
       const shape = getNodeShape(data.entityType);
@@ -872,12 +1576,12 @@ export default function GraphPanel({
     });
 
     if (!query) {
-      return { nodes: baseNodes, edges: styledEdges, entitiesById };
+      return { nodes: baseNodes, edges: styledEdges, entitiesById: clusterContext.entitiesById, clusterKeyById, genealogyTree };
     }
 
     const matchedIds = new Set<string>();
     baseNodes.forEach((node) => {
-      const entity = entitiesById.get(String(node.id));
+      const entity = clusterContext.entitiesById.get(String(node.id));
       const haystack = [
         String(node.id),
         entity?.name ?? "",
@@ -909,7 +1613,9 @@ export default function GraphPanel({
       edges: styledEdges.filter(
         (edge) => relatedIds.has(String(edge.source)) && relatedIds.has(String(edge.target))
       ),
-      entitiesById,
+      entitiesById: clusterContext.entitiesById,
+      clusterKeyById,
+      genealogyTree,
     };
   }, [graphSearch, graphData, getEntityById, entityTypes, selectedEntityId, graphClusterMode]);
 
@@ -933,9 +1639,11 @@ export default function GraphPanel({
         ? null
         : buildClusteredPositions(
             visibleGraphData.nodes,
-            visibleGraphData.entitiesById,
+            visibleGraphData.clusterKeyById,
             graphLayoutMode,
-            graphClusterMode
+            graphClusterMode,
+            selectedEntityId,
+            visibleGraphData.genealogyTree
           );
 
     const entityNodes = visibleGraphData.nodes.map((node) => {
@@ -966,7 +1674,7 @@ export default function GraphPanel({
         : buildClusterBackgroundNodes(
             entityNodes,
             positions ?? {},
-            visibleGraphData.entitiesById,
+            visibleGraphData.clusterKeyById,
             graphLayoutMode,
             graphClusterMode
           );
@@ -987,7 +1695,7 @@ export default function GraphPanel({
 
     if (graphLayoutMode === "auto" || graphLayoutMode === "map") {
       window.requestAnimationFrame(() => {
-        reactFlowInstance.fitView({ padding: graphLayoutMode === "map" ? 0.28 : 0.22, duration: 260 });
+        reactFlowInstance.fitView({ padding: graphLayoutMode === "map" ? 0.34 : 0.28, duration: 280, includeHiddenNodes: true });
       });
     }
   }, [layoutedNodes, graphLayoutMode, reactFlowInstance]);
@@ -1020,7 +1728,7 @@ export default function GraphPanel({
   }
 
   function handleResetFreeLayout() {
-    const visibleIds = new Set(visibleGraphData.nodes.map((node) => String(node.id)));
+    const visibleIds = new Set<string>(visibleGraphData.nodes.map((node) => String(node.id)));
     setManualNodePositions((current) => {
       const next = { ...current };
       visibleIds.forEach((id) => delete next[id]);
@@ -1172,6 +1880,9 @@ export default function GraphPanel({
               </button>
               <button type="button" onClick={() => setGraphClusterMode("faction")} style={modeButtonStyle(graphClusterMode === "faction")}>
                 Cluster fazione
+              </button>
+              <button type="button" onClick={() => setGraphClusterMode("genealogy")} style={modeButtonStyle(graphClusterMode === "genealogy")}>
+                Cluster genealogia
               </button>
             </div>
 
