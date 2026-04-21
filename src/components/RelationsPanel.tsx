@@ -1,9 +1,10 @@
 import { UI_TEXT } from "../config";
+import EntityTypeIcon from "./EntityTypeIcon";
 import {
-  cardStyle,
+  cinematicMotion,
+  cinematicTypography,
   dangerButtonStyle,
   inputDarkStyle,
-  panelStyle,
   primaryButtonStyle,
   selectStyle,
 } from "../styles";
@@ -14,7 +15,7 @@ import {
   getRelationTypeForPerspective,
   getTypeColor,
 } from "../utils/entity";
-import { getEntityTypeIcon, uiIcons } from "../utils/icons";
+import { uiIcons } from "../utils/icons";
 
 type RelationsPanelProps = {
   entityTypes: EntityTypeDefinition[];
@@ -36,24 +37,48 @@ type RelationsPanelProps = {
 };
 
 const sectionLabelStyle: React.CSSProperties = {
-  display: "flex",
+  display: "inline-flex",
   alignItems: "center",
-  gap: "8px",
-  fontSize: "14px",
-  color: "#9ca3af",
-  marginBottom: "8px",
-  fontWeight: 700,
+  gap: 8,
+  fontSize: 11,
+  color: cinematicTypography.inkSoft,
+  textTransform: "uppercase",
+  letterSpacing: "0.1em",
+  fontWeight: 800,
 };
 
 const relationMetaTextStyle: React.CSSProperties = {
-  fontSize: "12px",
-  color: "#9ca3af",
-  lineHeight: 1.45,
+  fontSize: 12,
+  color: cinematicTypography.inkMuted,
+  lineHeight: 1.6,
 };
+
+function relationChipStyle(isActive: boolean): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 999,
+    border: isActive
+      ? "1px solid rgba(146,182,255,0.2)"
+      : "1px solid rgba(255,255,255,0.05)",
+    background: isActive ? "rgba(255,255,255,0.06)" : "transparent",
+    color: isActive ? cinematicTypography.inkStrong : cinematicTypography.ink,
+    padding: "7px 11px",
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: "pointer",
+    boxShadow: isActive
+      ? "0 8px 18px rgba(0,0,0,0.14), 0 0 14px rgba(100,150,255,0.05)"
+      : "none",
+    backdropFilter: "blur(16px)",
+    WebkitBackdropFilter: "blur(16px)",
+    transition: cinematicMotion.transition,
+  };
+}
 
 export default function RelationsPanel({
   entityTypes,
-  entities,
   relations,
   selectedEntity,
   availableRelationTargets,
@@ -73,70 +98,85 @@ export default function RelationsPanel({
   const matchingPreset =
     relationPresets.find((preset) => preset.type === normalizedType) ?? null;
   const selectedAccent = getTypeColor(selectedEntity.type, entityTypes);
-  const SelectedEntityIcon = getEntityTypeIcon(selectedEntity.type);
+  const outgoingCount = selectedEntityRelations.filter(
+    (relation) => relation.fromEntityId === selectedEntity.id
+  ).length;
+  const incomingCount = selectedEntityRelations.length - outgoingCount;
 
   return (
     <div
       style={{
-        ...panelStyle,
-        border: "1px solid rgba(148, 163, 184, 0.14)",
+        display: "grid",
+        gap: 22,
+        paddingLeft: 2,
       }}
     >
       <div
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "10px",
-          marginTop: 0,
-          marginBottom: "16px",
-        }}
-      >
-        <uiIcons.relations size={18} />
-        <h2 style={{ margin: 0 }}>Relazioni</h2>
-      </div>
-
-      <div
-        style={{
-          ...cardStyle,
-          marginBottom: "16px",
           display: "grid",
-          gap: "12px",
+          gap: 12,
+          paddingBottom: 18,
+          borderBottom: "1px solid rgba(255,255,255,0.08)",
         }}
       >
+        <div style={sectionLabelStyle}>
+          <uiIcons.relations size={14} />
+          Inspector relazioni
+        </div>
+
         <div
           style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "10px",
-            padding: "10px 12px",
-            borderRadius: "14px",
-            background: `${selectedAccent}12`,
-            border: `1px solid ${selectedAccent}33`,
+            display: "grid",
+            gap: 10,
           }}
         >
           <div
             style={{
-              width: "32px",
-              height: "32px",
-              borderRadius: "10px",
+              fontFamily: cinematicTypography.displayFont,
+              fontSize: 28,
+              lineHeight: 1.05,
+              color: cinematicTypography.inkStrong,
+            }}
+          >
+            Relazioni del focus attuale
+          </div>
+          <div style={{ ...relationMetaTextStyle, maxWidth: 520 }}>
+            Il pannello destro legge i legami della scheda attiva come contesto, non come un
+            modulo separato dal workspace.
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <div
+            style={{
+              width: 40,
+              height: 40,
+              borderRadius: 14,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              background: `${selectedAccent}22`,
-              border: `1px solid ${selectedAccent}44`,
+              background: `${selectedAccent}14`,
+              border: `1px solid ${selectedAccent}24`,
               flexShrink: 0,
             }}
           >
-            <SelectedEntityIcon size={16} color={selectedAccent} />
+            <EntityTypeIcon type={selectedEntity.type} size={18} color={selectedAccent} />
           </div>
 
-          <div style={{ minWidth: 0 }}>
+          <div style={{ minWidth: 0, display: "grid", gap: 2, flex: 1 }}>
             <div
               style={{
-                fontSize: "14px",
-                fontWeight: 800,
-                color: "#f3f4f6",
-                lineHeight: 1.2,
+                fontFamily: cinematicTypography.displayFont,
+                fontSize: 21,
+                color: cinematicTypography.inkStrong,
+                lineHeight: 1.1,
               }}
             >
               {selectedEntity.name}
@@ -145,14 +185,42 @@ export default function RelationsPanel({
               {getEntityTypeLabel(selectedEntity.type, entityTypes)}
             </div>
           </div>
+
+          <div
+            style={{
+              display: "flex",
+              gap: 14,
+              flexWrap: "wrap",
+              color: cinematicTypography.inkSoft,
+              fontSize: 12,
+            }}
+          >
+            <span>{outgoingCount} in uscita</span>
+            <span>{incomingCount} in entrata</span>
+          </div>
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gap: 14,
+          padding: "14px 0 18px",
+          borderTop: "1px solid rgba(255,255,255,0.08)",
+          borderBottom: "1px solid rgba(255,255,255,0.08)",
+        }}
+      >
+        <div style={{ display: "grid", gap: 6 }}>
+          <div style={sectionLabelStyle}>
+            <uiIcons.newEntity size={14} />
+            Componi legame
+          </div>
+          <div style={relationMetaTextStyle}>
+            Preset veloci per iniziare, campi aperti per rifinire relazione e inverso.
+          </div>
         </div>
 
-        <div style={sectionLabelStyle}>
-          <uiIcons.newEntity size={14} />
-          Crea nuova relazione
-        </div>
-
-        <div style={{ display: "grid", gap: "10px" }}>
+        <div style={{ display: "grid", gap: 12 }}>
           <input
             list="relation-presets"
             type="text"
@@ -176,16 +244,9 @@ export default function RelationsPanel({
             style={inputDarkStyle}
           />
 
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "8px",
-            }}
-          >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {relationPresets.map((preset) => {
               const isActive = normalizedType === preset.type;
-
               return (
                 <button
                   key={preset.type}
@@ -194,20 +255,7 @@ export default function RelationsPanel({
                     onRelationTypeChange(preset.type);
                     onRelationInverseTypeChange(preset.inverseType ?? "");
                   }}
-                  style={{
-                    background: isActive
-                      ? "linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)"
-                      : "linear-gradient(180deg, #0f1726 0%, #0b1220 100%)",
-                    color: "#f8fafc",
-                    border: isActive
-                      ? "1px solid rgba(96,165,250,0.34)"
-                      : "1px solid rgba(148,163,184,0.14)",
-                    borderRadius: "999px",
-                    padding: "7px 10px",
-                    fontSize: "12px",
-                    fontWeight: 700,
-                    cursor: "pointer",
-                  }}
+                  style={relationChipStyle(isActive)}
                 >
                   {preset.type}
                 </button>
@@ -229,7 +277,7 @@ export default function RelationsPanel({
             <option value="">{UI_TEXT.relationTargetPlaceholder}</option>
             {availableRelationTargets.map((entity) => (
               <option key={entity.id} value={entity.id}>
-                {entity.name} — {getEntityTypeLabel(entity.type, entityTypes)}
+                {entity.name} · {getEntityTypeLabel(entity.type, entityTypes)}
               </option>
             ))}
           </select>
@@ -239,10 +287,11 @@ export default function RelationsPanel({
             onClick={onAddRelation}
             style={{
               ...primaryButtonStyle,
-              display: "flex",
+              display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",
-              gap: "8px",
+              gap: 8,
+              width: "fit-content",
             }}
           >
             <uiIcons.relations size={15} />
@@ -251,110 +300,116 @@ export default function RelationsPanel({
         </div>
       </div>
 
-      <div style={{ ...cardStyle, display: "grid", gap: "12px" }}>
+      <div style={{ display: "grid", gap: 14 }}>
         <div
           style={{
             display: "flex",
-            alignItems: "center",
             justifyContent: "space-between",
-            gap: "12px",
+            alignItems: "flex-end",
+            gap: 12,
             flexWrap: "wrap",
           }}
         >
-          <div style={sectionLabelStyle}>
-            <uiIcons.relations size={14} />
-            Relazioni visibili
+          <div style={{ display: "grid", gap: 6 }}>
+            <div style={sectionLabelStyle}>
+              <uiIcons.relations size={14} />
+              Legami in vista
+            </div>
+            <div
+              style={{
+                color: cinematicTypography.inkStrong,
+                fontFamily: cinematicTypography.displayFont,
+                fontSize: 24,
+                lineHeight: 1.08,
+              }}
+            >
+              Traccia relazioni visibili
+            </div>
           </div>
 
           <div style={relationMetaTextStyle}>
-            {selectedEntityRelations.length} su {relations.length} totali
+            {selectedEntityRelations.length} su {relations.length} relazioni del mondo
           </div>
         </div>
 
         {selectedEntityRelations.length === 0 ? (
-          <div style={relationMetaTextStyle}>
-            Nessuna relazione per questa entità.
+          <div style={{ ...relationMetaTextStyle, paddingTop: 4 }}>
+            Nessuna relazione per questa entità. Parti da un preset rapido oppure definisci un tipo
+            personalizzato.
           </div>
         ) : (
-          <div style={{ display: "grid", gap: "10px" }}>
+          <div style={{ display: "grid", gap: 8 }}>
             {selectedEntityRelations.map((relation) => {
               const isOutgoing = relation.fromEntityId === selectedEntity.id;
               const otherEntityId = isOutgoing
                 ? relation.toEntityId
                 : relation.fromEntityId;
               const otherEntity = getEntityById(otherEntityId);
-
               const relationLabel = getRelationTypeForPerspective(
                 relation.type,
                 relation.inverseType,
                 isOutgoing ? "outgoing" : "incoming"
               );
-
               const accent = otherEntity
                 ? getTypeColor(otherEntity.type, entityTypes)
                 : "#64748b";
-              const OtherIcon = otherEntity
-                ? getEntityTypeIcon(otherEntity.type)
-                : null;
 
               return (
                 <div
                   key={relation.id}
                   style={{
-                    ...cardStyle,
-                    padding: "12px",
+                    padding: "14px 0",
+                    borderBottom: "1px solid rgba(255,255,255,0.08)",
                     display: "grid",
-                    gap: "10px",
-                    border: "1px solid rgba(148, 163, 184, 0.14)",
+                    gap: 12,
                   }}
                 >
                   <div
                     style={{
                       display: "flex",
-                      alignItems: "flex-start",
                       justifyContent: "space-between",
-                      gap: "10px",
+                      alignItems: "flex-start",
+                      gap: 12,
                     }}
                   >
                     <div
                       style={{
                         display: "flex",
                         alignItems: "flex-start",
-                        gap: "10px",
+                        gap: 12,
                         minWidth: 0,
                       }}
                     >
-                      {OtherIcon ? (
+                      {otherEntity ? (
                         <div
                           style={{
-                            width: "30px",
-                            height: "30px",
-                            borderRadius: "10px",
+                            width: 34,
+                            height: 34,
+                            borderRadius: 12,
                             display: "flex",
                             alignItems: "center",
                             justifyContent: "center",
-                            background: `${accent}22`,
-                            border: `1px solid ${accent}44`,
+                            background: `${accent}16`,
+                            border: `1px solid ${accent}2a`,
                             flexShrink: 0,
                           }}
                         >
-                          <OtherIcon size={15} color={accent} />
+                          <EntityTypeIcon type={otherEntity.type} size={16} color={accent} />
                         </div>
                       ) : null}
 
-                      <div style={{ minWidth: 0 }}>
+                      <div style={{ minWidth: 0, display: "grid", gap: 4 }}>
                         <div
                           style={{
-                            fontSize: "14px",
+                            color: cinematicTypography.inkStrong,
                             fontWeight: 800,
-                            color: "#f3f4f6",
-                            lineHeight: 1.2,
+                            fontSize: 16,
+                            lineHeight: 1.25,
                             wordBreak: "break-word",
                           }}
                         >
                           {otherEntity?.name ?? "Entità sconosciuta"}
                         </div>
-
                         <div style={relationMetaTextStyle}>
                           {otherEntity
                             ? getEntityTypeLabel(otherEntity.type, entityTypes)
@@ -368,10 +423,10 @@ export default function RelationsPanel({
                       onClick={() => onDeleteRelation(relation.id)}
                       style={{
                         ...dangerButtonStyle,
-                        display: "flex",
+                        display: "inline-flex",
                         alignItems: "center",
                         justifyContent: "center",
-                        gap: "6px",
+                        gap: 6,
                         flexShrink: 0,
                       }}
                     >
@@ -381,57 +436,66 @@ export default function RelationsPanel({
 
                   <div
                     style={{
-                      display: "inline-flex",
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 8,
                       alignItems: "center",
-                      gap: "8px",
-                      width: "fit-content",
-                      padding: "6px 10px",
-                      borderRadius: "999px",
-                      background: isOutgoing
-                        ? "rgba(59,130,246,0.12)"
-                        : "rgba(168,85,247,0.12)",
-                      border: isOutgoing
-                        ? "1px solid rgba(59,130,246,0.28)"
-                        : "1px solid rgba(168,85,247,0.28)",
-                      color: "#f8fafc",
-                      fontSize: "12px",
-                      fontWeight: 800,
                     }}
                   >
-                    <uiIcons.relations size={13} />
-                    {isOutgoing ? "→" : "←"} {relationLabel}
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 8,
+                        width: "fit-content",
+                        padding: "7px 11px",
+                        borderRadius: 999,
+                        background: isOutgoing ? "rgba(84,198,173,0.12)" : "rgba(146,182,255,0.12)",
+                        color: cinematicTypography.inkStrong,
+                        border: "1px solid rgba(255,255,255,0.08)",
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {isOutgoing ? "In uscita" : "In entrata"}
+                    </span>
+
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "7px 11px",
+                        borderRadius: 999,
+                        background: "rgba(255,255,255,0.03)",
+                        border: "1px solid rgba(255,255,255,0.08)",
+                        color: cinematicTypography.ink,
+                        fontSize: 12,
+                      }}
+                    >
+                      {relationLabel}
+                    </span>
+
+                    {relation.source === "metadata" ? (
+                      <span
+                        style={{
+                          padding: "7px 11px",
+                          borderRadius: 999,
+                          background: "rgba(255,255,255,0.03)",
+                          border: "1px solid rgba(255,255,255,0.06)",
+                          color: cinematicTypography.inkSoft,
+                          fontSize: 12,
+                        }}
+                      >
+                        Generata da metadata
+                      </span>
+                    ) : null}
                   </div>
-
-                  {relation.inverseType ? (
-                    <div style={relationMetaTextStyle}>
-                      Tipo base: <strong>{relation.type}</strong> · Inverso:{" "}
-                      <strong>{relation.inverseType}</strong>
-                    </div>
-                  ) : (
-                    <div style={relationMetaTextStyle}>
-                      Tipo base: <strong>{relation.type}</strong>
-                    </div>
-                  )}
-
-                  {relation.source === "metadata" ? (
-                    <div style={relationMetaTextStyle}>
-                      Origine: <strong>campo metadata</strong>
-                      {relation.sourceFieldKey ? ` · ${relation.sourceFieldKey}` : ""}
-                    </div>
-                  ) : relation.source === "manual" ? (
-                    <div style={relationMetaTextStyle}>
-                      Origine: <strong>manuale</strong>
-                    </div>
-                  ) : null}
                 </div>
               );
             })}
           </div>
         )}
-
-        <div style={relationMetaTextStyle}>
-          Entità archiviate: <strong>{entities.length}</strong>
-        </div>
       </div>
     </div>
   );

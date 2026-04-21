@@ -83,9 +83,51 @@ export type ImageAssetExport = {
   mimeType?: string;
 };
 
+export type SemanticViewId =
+  | "default"
+  | "political-map"
+  | "genealogy"
+  | "event-chain"
+  | "faction-network";
+
+export type RelationAutomationRule = {
+  id: string;
+  label: string;
+  enabled?: boolean;
+  sourceEntityType: EntityType | "all";
+  sourceMetadataKey: string;
+  targetEntityType: EntityType | "all";
+  targetMetadataKey: string;
+  relationType: string;
+  inverseType?: string;
+  mode?: "suggest" | "auto";
+};
+
+export type WorkspacePreset = {
+  id: string;
+  label: string;
+  semanticView: SemanticViewId;
+  graphViewMode: string;
+  graphFilter: string;
+  graphViewType: string;
+  graphViewTag: string;
+  graphRelationFilter: string;
+  graphNeighborhoodDepth: number;
+  graphTypeFilters: Record<string, boolean>;
+};
+
+export type NarrativePackageMeta = {
+  packageType: "region" | "storyline" | "faction" | "cast";
+  seed: string;
+  label: string;
+  createdAt: string;
+};
+
 export type WorldData = {
+  version?: number;
   entityTypes?: EntityTypeDefinition[];
   entities: Entity[];
   relations: Relation[];
   imageAssets?: ImageAssetExport[];
+  packageMeta?: NarrativePackageMeta;
 };

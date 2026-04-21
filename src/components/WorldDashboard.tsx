@@ -1,7 +1,7 @@
 import { BookOpen, Compass, Gem, Link2, MapPinned, Shield, Sparkles, Users } from "lucide-react";
 import type { Entity, EntityTypeDefinition, Relation } from "../types";
+import EntityTypeIcon from "./EntityTypeIcon";
 import { getEntityTypeLabel, getTypeColor } from "../utils/entity";
-import { getEntityTypeIcon } from "../utils/icons";
 
 type Props = {
   entityTypes: EntityTypeDefinition[];
@@ -126,7 +126,6 @@ function EntityButton({
   extra?: string;
   onClick: () => void;
 }) {
-  const Icon = getEntityTypeIcon(entity.type);
   const accent = getTypeColor(entity.type, entityTypes);
 
   return (
@@ -162,7 +161,7 @@ function EntityButton({
             flexShrink: 0,
           }}
         >
-          <Icon size={16} />
+          <EntityTypeIcon type={entity.type} size={16} />
         </span>
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ fontWeight: 800, color: "#f6efe2" }}>{entity.name}</div>

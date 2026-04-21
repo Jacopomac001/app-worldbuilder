@@ -10,13 +10,16 @@ import {
   Waypoints,
 } from "lucide-react";
 import { UI_TEXT } from "../config";
+import { useViewportWidth } from "../hooks/useViewportWidth";
+import EntityTypeIcon from "./EntityTypeIcon";
 import {
-  cardStyle,
+  cinematicMotion,
+  cinematicTypography,
   dangerButtonStyle,
   ghostButtonStyle,
   inputDarkStyle,
   inputStyle,
-  panelStyle,
+  modeButtonStyle,
   primaryButtonStyle,
   removableTagStyle,
   textareaStyle,
@@ -83,15 +86,30 @@ type NarrativeRelationItem = {
   label: string;
 };
 
+type MetadataPreviewItem = {
+  field: MetadataFieldDefinition;
+  value: string;
+};
+
+type MetadataGroupId = "identity" | "connections" | "context" | "details";
+
+type MetadataGroup<T> = {
+  id: MetadataGroupId;
+  label: string;
+  description: string;
+  items: T[];
+};
+
 type DndStatStringKey = Exclude<keyof DndStats, "enabled">;
 
 const fieldLabelStyle: React.CSSProperties = {
   display: "block",
   marginBottom: "6px",
-  color: "#b6c2d3",
-  fontSize: "13px",
+  color: cinematicTypography.inkMuted,
+  fontSize: "11px",
   fontWeight: 800,
-  letterSpacing: "0.01em",
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
 };
 
 const contextualActionButtonStyle: React.CSSProperties = {
@@ -101,6 +119,9 @@ const contextualActionButtonStyle: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: "8px",
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.04)",
+  color: cinematicTypography.ink,
 };
 
 const abilityFields: Array<{ key: DndStatStringKey; label: string }> = [
@@ -131,6 +152,75 @@ const longStatFields: Array<{ key: DndStatStringKey; label: string; placeholder:
   { key: "sensi", label: "Sensi", placeholder: "Es. Scurovisione 18 m" },
   { key: "linguaggi", label: "Linguaggi", placeholder: "Es. Comune, Elfico" },
 ];
+
+const metadataGroupMeta: Record<MetadataGroupId, { label: string; description: string }> = {
+  identity: {
+    label: "Identità",
+    description: "Ruolo, natura e tratti che definiscono subito l'entità.",
+  },
+  connections: {
+    label: "Appartenenze e legami",
+    description: "Affiliazioni, casate, figure chiave e legami ricorrenti.",
+  },
+  context: {
+    label: "Spazio e tempo",
+    description: "Contesto geografico, temporale o storico in cui si colloca.",
+  },
+  details: {
+    label: "Dettagli aggiuntivi",
+    description: "Informazioni secondarie o specialistiche ancora utili in consultazione.",
+  },
+};
+
+function classifyMetadataGroup(field: MetadataFieldDefinition): MetadataGroupId {
+  const normalized = `${field.key} ${field.label}`.toLowerCase();
+
+  if (
+    /(razza|classe|status|stato sociale|titolo|ruolo|professione|allineamento|specie|tipo|ideologia|rank|rango)/.test(
+      normalized
+    )
+  ) {
+    return "identity";
+  }
+
+  if (
+    /(fazione|famiglia|casata|casato|leader|allea|nemic|appart|figli|padre|madre|mentore|ordine|culto|governa|sovrano|gruppo)/.test(
+      normalized
+    )
+  ) {
+    return "connections";
+  }
+
+  if (
+    /(luogo|regione|territorio|zona|citt|villaggio|continente|paese|clima|origine|residenza|dimora|nascita|anno|epoca|era|cronolog|tempo|data|storia|scenario|popolazione|pericolo)/.test(
+      normalized
+    )
+  ) {
+    return "context";
+  }
+
+  return "details";
+}
+
+function groupMetadataItems<T extends { field: MetadataFieldDefinition }>(items: T[]): Array<MetadataGroup<T>> {
+  const buckets = new Map<MetadataGroupId, T[]>();
+
+  items.forEach((item) => {
+    const groupId = classifyMetadataGroup(item.field);
+    const groupItems = buckets.get(groupId) ?? [];
+    groupItems.push(item);
+    buckets.set(groupId, groupItems);
+  });
+
+  return (["identity", "connections", "context", "details"] as MetadataGroupId[])
+    .map((id) => ({
+      id,
+      label: metadataGroupMeta[id].label,
+      description: metadataGroupMeta[id].description,
+      items: buckets.get(id) ?? [],
+    }))
+    .filter((group) => group.items.length > 0);
+}
 
 function normalizeStatsPatch(stats: DndStats | undefined): DndStats | undefined {
   if (!stats) return undefined;
@@ -173,12 +263,8 @@ function CollapsibleSection({
   return (
     <div
       style={{
-        ...cardStyle,
-        padding: 0,
-        overflow: "hidden",
-        border: `1px solid ${open ? `${accentColor}55` : "rgba(167, 139, 78, 0.18)"}`,
-        background:
-          "linear-gradient(180deg, rgba(24,21,17,0.98) 0%, rgba(13,15,18,0.98) 100%)",
+        paddingTop: 8,
+        borderTop: `1px solid ${open ? `${accentColor}30` : "rgba(255,255,255,0.08)"}`,
       }}
     >
       <button
@@ -190,14 +276,13 @@ function CollapsibleSection({
           alignItems: "center",
           justifyContent: "space-between",
           gap: "12px",
-          padding: "14px 16px",
-          background: open
-            ? "linear-gradient(180deg, rgba(40,31,20,0.86) 0%, rgba(24,21,17,0.98) 100%)"
-            : "linear-gradient(180deg, rgba(22,21,18,0.95) 0%, rgba(17,18,20,0.98) 100%)",
+          padding: "6px 0 10px",
+          background: "transparent",
           border: "none",
           cursor: "pointer",
-          color: "#f7f2e8",
+          color: cinematicTypography.inkStrong,
           textAlign: "left",
+          transition: cinematicMotion.transition,
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
@@ -208,12 +293,20 @@ function CollapsibleSection({
               borderRadius: "999px",
               backgroundColor: accentColor,
               flexShrink: 0,
-              boxShadow: `0 0 18px ${accentColor}55`,
+              boxShadow: `0 0 18px ${accentColor}35`,
             }}
           />
           <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
             {icon}
-            <span style={{ fontSize: "15px", fontWeight: 800, color: "#f7f2e8" }}>
+            <span
+              style={{
+                fontSize: "16px",
+                fontWeight: 800,
+                color: cinematicTypography.inkStrong,
+                fontFamily: cinematicTypography.displayFont,
+                letterSpacing: "0.01em",
+              }}
+            >
               {title}
             </span>
           </div>
@@ -228,10 +321,9 @@ function CollapsibleSection({
       {open ? (
         <div
           style={{
-            padding: "16px",
-            borderTop: "1px solid rgba(167, 139, 78, 0.14)",
+            padding: "2px 0 0",
             display: "grid",
-            gap: "14px",
+            gap: "16px",
           }}
         >
           {children}
@@ -264,8 +356,8 @@ function ReferenceAutocompleteField({
   const [open, setOpen] = useState(false);
   const blurTimeoutRef = useRef<number | null>(null);
 
-  const allowedTypes = field.allowedEntityTypes ?? [];
   const filteredEntities = useMemo(() => {
+    const allowedTypes = field.allowedEntityTypes ?? [];
     const normalizedQuery = value.trim().toLowerCase();
 
     return entities
@@ -290,7 +382,7 @@ function ReferenceAutocompleteField({
         return a.name.localeCompare(b.name, "it", { sensitivity: "base" });
       })
       .slice(0, 8);
-  }, [allowedTypes, entities, selectedEntity.id, value]);
+  }, [entities, field.allowedEntityTypes, selectedEntity.id, value]);
 
   function commit(valueToCommit: string) {
     onChange(valueToCommit, { commitReference: true });
@@ -463,13 +555,10 @@ function MetadataReadCard({
   return (
     <div
       style={{
-        padding: "14px 16px",
-        borderRadius: 16,
-        border: "1px solid rgba(167,139,78,0.14)",
-        background:
-          "linear-gradient(180deg, rgba(27,23,18,0.95) 0%, rgba(14,15,18,0.98) 100%)",
+        padding: "0 16px 0 0",
+        borderRight: "1px solid rgba(255,255,255,0.08)",
         display: "grid",
-        gap: 6,
+        gap: 7,
       }}
     >
       <div
@@ -477,13 +566,22 @@ function MetadataReadCard({
           fontSize: 11,
           textTransform: "uppercase",
           letterSpacing: "0.08em",
-          color: "#b89c63",
+          color: cinematicTypography.inkSoft,
           fontWeight: 800,
         }}
       >
         {label}
       </div>
-      <div style={{ color: "#f6efe2", lineHeight: 1.55, fontWeight: 600 }}>{value}</div>
+      <div
+        style={{
+          color: cinematicTypography.inkStrong,
+          lineHeight: 1.6,
+          fontWeight: 600,
+          fontSize: 15,
+        }}
+      >
+        {value}
+      </div>
     </div>
   );
 }
@@ -497,7 +595,6 @@ function NarrativeRelationCard({
   onOpenEntity: (id: string) => void;
   entityTypes: EntityTypeDefinition[];
 }) {
-  const Icon = getEntityTypeIcon(item.otherEntity.type);
   const accent = getTypeColor(item.otherEntity.type, entityTypes);
 
   return (
@@ -507,15 +604,16 @@ function NarrativeRelationCard({
       style={{
         width: "100%",
         textAlign: "left",
-        padding: "14px 16px",
-        borderRadius: 16,
-        border: "1px solid rgba(167,139,78,0.16)",
-        background:
-          "linear-gradient(180deg, rgba(25,23,19,0.96) 0%, rgba(13,15,18,0.98) 100%)",
-        color: "#f8fafc",
+        padding: "14px 0",
+        borderRadius: 0,
+        border: "none",
+        borderBottom: "1px solid rgba(255,255,255,0.08)",
+        background: "transparent",
+        color: cinematicTypography.inkStrong,
         display: "grid",
         gap: 8,
         cursor: "pointer",
+        transition: cinematicMotion.transition,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -523,23 +621,31 @@ function NarrativeRelationCard({
           style={{
             width: 28,
             height: 28,
-            borderRadius: 10,
+            borderRadius: 12,
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
-            background: `${accent}22`,
+            background: `${accent}18`,
             color: accent,
-            border: `1px solid ${accent}33`,
+            border: `1px solid ${accent}30`,
             flexShrink: 0,
           }}
         >
-          <Icon size={15} />
+          <EntityTypeIcon type={item.otherEntity.type} size={15} />
         </span>
         <div style={{ minWidth: 0 }}>
-          <div style={{ color: "#f7f2e8", fontWeight: 800, lineHeight: 1.4 }}>
+          <div
+            style={{
+              color: cinematicTypography.inkStrong,
+              fontWeight: 800,
+              lineHeight: 1.4,
+              fontFamily: cinematicTypography.displayFont,
+              fontSize: 17,
+            }}
+          >
             {item.label} <span style={{ color: accent }}>{item.otherEntity.name}</span>
           </div>
-          <div style={{ color: "#9fb0c7", fontSize: 12 }}>
+          <div style={{ color: cinematicTypography.inkMuted, fontSize: 12 }}>
             {getEntityTypeLabel(item.otherEntity.type, entityTypes)}
             {item.otherEntity.shortDescription ? ` · ${item.otherEntity.shortDescription}` : ""}
           </div>
@@ -565,6 +671,9 @@ export default function EntityEditor({
   onOpenEntity,
   onCenterInGraph,
 }: EntityEditorProps) {
+  const viewportWidth = useViewportWidth();
+  const isNarrowEditor = viewportWidth < 1120;
+  const isCompactEditor = viewportWidth < 820;
   const [mode, setMode] = useState<EditorMode>("read");
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [imageModalOpen, setImageModalOpen] = useState(false);
@@ -576,7 +685,10 @@ export default function EntityEditor({
   const typeLabel = getEntityTypeLabel(selectedEntity.type, entityTypes);
   const TypeIcon = getEntityTypeIcon(selectedEntity.type);
   const metadataFields = getMetadataFieldsForEntityType(selectedEntity.type, entityTypes);
-  const metadata = selectedEntity.metadata ?? {};
+  const metadata = useMemo(
+    () => selectedEntity.metadata ?? {},
+    [selectedEntity.metadata]
+  );
   const stats = selectedEntity.stats;
   const statsEnabled = Boolean(stats?.enabled);
 
@@ -637,11 +749,21 @@ export default function EntityEditor({
     [entities]
   );
 
-  const metadataPreview = useMemo(() => {
+  const metadataPreview = useMemo<MetadataPreviewItem[]>(() => {
     return metadataFields
       .map((field) => ({ field, value: metadata[field.key] ?? "" }))
       .filter((item) => item.value.trim().length > 0);
   }, [metadata, metadataFields]);
+
+  const groupedMetadataPreview = useMemo(
+    () => groupMetadataItems(metadataPreview),
+    [metadataPreview]
+  );
+
+  const groupedMetadataFields = useMemo(
+    () => groupMetadataItems(metadataFields.map((field) => ({ field }))),
+    [metadataFields]
+  );
 
   const outgoingRelations = useMemo<NarrativeRelationItem[]>(() => {
     const items: NarrativeRelationItem[] = [];
@@ -702,6 +824,190 @@ export default function EntityEditor({
 
     return entries;
   }, [metadata, selectedEntity.createdAt, selectedEntity.updatedAt]);
+
+  const narrativeTemplate = useMemo(() => {
+    const pick = (...keys: string[]) =>
+      keys.map((key) => metadata[key]?.trim() ?? "").find(Boolean) ?? "";
+
+    const outgoingNamed = outgoingRelations.slice(0, 4).map((item) => `${item.label} ${item.otherEntity.name}`);
+    const incomingNamed = incomingRelations.slice(0, 4).map((item) => `${item.label} ${item.otherEntity.name}`);
+    const relationshipHighlights = [...outgoingNamed, ...incomingNamed].slice(0, 4);
+
+    if (selectedEntity.type === "personaggio") {
+      const ruolo = pick("ruolo");
+      const razza = pick("razza");
+      const status = pick("status");
+      const fazione = pick("fazione");
+      const casa = pick("abitaIn");
+
+      return {
+        lead:
+          [selectedEntity.name, ruolo ? `è ${ruolo}` : "", razza ? `di stirpe ${razza}` : "", fazione ? `legato a ${fazione}` : ""]
+            .filter(Boolean)
+            .join(" ")
+            .replace(" è", " è"),
+        cards: [
+          { label: "Ruolo", value: ruolo || "Non definito" },
+          { label: "Razza", value: razza || "Non definita" },
+          { label: "Status", value: status || "Non definito" },
+          { label: "Base narrativa", value: casa || "Non definita" },
+        ],
+        relationshipHighlights,
+      };
+    }
+
+    if (selectedEntity.type === "luogo") {
+      const regione = pick("regione");
+      const clima = pick("clima");
+      const popolazione = pick("popolazione");
+      const pericolo = pick("pericolo");
+
+      return {
+        lead:
+          selectedEntity.shortDescription ||
+          `${selectedEntity.name} appartiene a ${regione || "un'area non definita"} e presenta un clima ${clima || "non indicato"}.`,
+        cards: [
+          { label: "Regione", value: regione || "Non definita" },
+          { label: "Clima", value: clima || "Non definito" },
+          { label: "Popolazione", value: popolazione || "Non definita" },
+          { label: "Pericolo", value: pericolo || "Non definito" },
+        ],
+        relationshipHighlights,
+      };
+    }
+
+    if (selectedEntity.type === "evento") {
+      const anno = pick("anno");
+      const epoca = pick("epoca");
+      const stato = pick("stato");
+      const luogo = pick("luogo");
+
+      return {
+        lead:
+          selectedEntity.shortDescription ||
+          `${selectedEntity.name} si colloca ${anno ? `nell'anno ${anno}` : "in una data non definita"}${epoca ? `, durante ${epoca}` : ""}.`,
+        cards: [
+          { label: "Anno", value: anno || "Non definito" },
+          { label: "Epoca", value: epoca || "Non definita" },
+          { label: "Stato", value: stato || "Non definito" },
+          { label: "Luogo", value: luogo || "Non definito" },
+        ],
+        relationshipHighlights,
+      };
+    }
+
+    if (selectedEntity.type === "fazione") {
+      const leader = pick("leader");
+      const territorio = pick("territorio");
+      const ideologia = pick("ideologia");
+      const risorse = pick("risorse");
+
+      return {
+        lead:
+          selectedEntity.shortDescription ||
+          `${selectedEntity.name} opera ${territorio ? `su ${territorio}` : "senza territorio definito"}${leader ? ` sotto la guida di ${leader}` : ""}.`,
+        cards: [
+          { label: "Leader", value: leader || "Non definito" },
+          { label: "Territorio", value: territorio || "Non definito" },
+          { label: "Ideologia", value: ideologia || "Non definita" },
+          { label: "Risorse", value: risorse || "Non definite" },
+        ],
+        relationshipHighlights,
+      };
+    }
+
+    return {
+      lead: selectedEntity.shortDescription || "Nessun sommario narrativo disponibile.",
+      cards: metadataPreview.slice(0, 4).map(({ field, value }) => ({
+        label: field.label,
+        value,
+      })),
+      relationshipHighlights,
+    };
+  }, [incomingRelations, metadata, metadataPreview, outgoingRelations, selectedEntity.name, selectedEntity.shortDescription, selectedEntity.type]);
+
+  const relationSections = [
+    {
+      id: "outgoing",
+      label: "In uscita",
+      caption: "Legami generati o dichiarati da questa entità.",
+      emptyText: "Nessuna relazione in uscita.",
+      total: outgoingRelations.length,
+      items: outgoingRelations.slice(0, 6),
+    },
+    {
+      id: "incoming",
+      label: "In entrata",
+      caption: "Legami che convergono su questa entità.",
+      emptyText: "Nessuna relazione in entrata.",
+      total: incomingRelations.length,
+      items: incomingRelations.slice(0, 6),
+    },
+  ] as const;
+
+  const workspaceSummaryCards = [
+    {
+      label: "Relazioni",
+      value: String(outgoingRelations.length + incomingRelations.length),
+      helper:
+        outgoingRelations.length + incomingRelations.length > 0
+          ? `${outgoingRelations.length} in uscita · ${incomingRelations.length} in entrata`
+          : "Nessun legame ancora definito",
+    },
+    {
+      label: "Metadati",
+      value: String(metadataPreview.length),
+      helper:
+        metadataPreview.length > 0
+          ? metadataPreview
+              .slice(0, 2)
+              .map((item) => item.field.label)
+              .join(" · ")
+          : "Campi custom ancora vuoti",
+    },
+    {
+      label: "Timeline",
+      value: timelineEntries[0]?.value ?? "N/A",
+      helper: timelineEntries[0]?.label ?? "Nessun riferimento temporale",
+    },
+  ];
+
+  const visibleHeaderTags = mode === "edit" ? selectedEntity.tags : selectedEntity.tags.slice(0, 6);
+  const hiddenHeaderTagCount = Math.max(0, selectedEntity.tags.length - visibleHeaderTags.length);
+  const editorStatusLabel = mode === "edit" ? "Modifica attiva" : "Lettura focalizzata";
+  const editorStatusDescription =
+    mode === "edit"
+      ? "Stai aggiornando contenuti e struttura della scheda."
+      : "Stai leggendo la scheda con meno rumore visivo e più priorità narrativa.";
+
+  const heroHighlights = useMemo(() => {
+    const preferredCards = narrativeTemplate.cards.filter(
+      (card) => card.value.trim() && !card.value.startsWith("Non ")
+    );
+
+    const highlights = [
+      ...preferredCards.slice(0, 3),
+      ...(timelineEntries[0] ? [timelineEntries[0]] : []),
+      {
+        label: "Relazioni attive",
+        value:
+          outgoingRelations.length + incomingRelations.length > 0
+            ? `${outgoingRelations.length + incomingRelations.length} collegamenti`
+            : "Nessuna ancora",
+      },
+    ];
+
+    return highlights
+      .filter(
+        (item, index, array) =>
+          array.findIndex(
+            (candidate) =>
+              candidate.label.toLowerCase() === item.label.toLowerCase() &&
+              candidate.value.toLowerCase() === item.value.toLowerCase()
+          ) === index
+      )
+      .slice(0, 5);
+  }, [incomingRelations.length, narrativeTemplate.cards, outgoingRelations.length, timelineEntries]);
 
   async function handleImageSelected(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -770,13 +1076,29 @@ export default function EntityEditor({
   return (
     <div
       style={{
-        ...panelStyle,
-        border: "1px solid rgba(167,139,78,0.18)",
-        background:
-          "radial-gradient(circle at top left, rgba(102,126,72,0.09), transparent 24%), linear-gradient(180deg, rgba(31,26,20,0.98) 0%, rgba(11,13,17,0.99) 100%)",
-        boxShadow: "0 20px 48px rgba(0,0,0,0.28)",
         display: "grid",
-        gap: 18,
+        gap: 22,
+        padding: "2px 0 10px",
+        position: "relative",
+        isolation: "isolate",
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          inset: "0 0 auto 0",
+          height: 320,
+          background:
+            "radial-gradient(circle at top left, rgba(120,160,255,0.1), transparent 34%), radial-gradient(circle at 90% 0%, rgba(255,170,120,0.08), transparent 26%)",
+          pointerEvents: "none",
+          zIndex: -1,
+          filter: "blur(16px)",
+        }}
+      />
+      <div
+        style={{
+        display: "grid",
+        gap: 16,
       }}
     >
       <input
@@ -788,26 +1110,79 @@ export default function EntityEditor({
       />
 
       <div
-        style={{
-          ...cardStyle,
-          padding: 0,
-          overflow: "hidden",
-          border: `1px solid ${accentColor}33`,
-          background:
-            resolvedImageSrc
-              ? `linear-gradient(180deg, rgba(16,16,16,0.18) 0%, rgba(10,10,10,0.82) 100%), url(${resolvedImageSrc}) center/cover`
-              : "linear-gradient(135deg, rgba(57,49,33,0.92) 0%, rgba(26,31,24,0.92) 55%, rgba(12,15,18,0.96) 100%)",
-        }}
-      >
-        <div
           style={{
-            padding: "22px",
+            padding: 0,
+            overflow: "hidden",
+            borderBottom: "1px solid rgba(255,255,255,0.08)",
             background:
-              "linear-gradient(180deg, rgba(9,10,12,0.18) 0%, rgba(9,10,12,0.78) 32%, rgba(9,10,12,0.96) 100%)",
-            display: "grid",
-            gap: 18,
+              resolvedImageSrc
+                ? `linear-gradient(180deg, rgba(10,14,22,0.12) 0%, rgba(8,10,16,0.48) 100%), url(${resolvedImageSrc}) center/cover`
+                : "transparent",
           }}
         >
+        <div
+          style={{
+            padding: "22px 0 18px",
+            background:
+              "linear-gradient(180deg, rgba(8,10,16,0.05) 0%, rgba(8,10,16,0.26) 44%, rgba(8,10,16,0.42) 100%)",
+            display: "grid",
+            gap: 16,
+            backdropFilter: "blur(12px)",
+            WebkitBackdropFilter: "blur(12px)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ display: "grid", gap: 4 }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.08em",
+                    color: cinematicTypography.gold,
+                    fontWeight: 800,
+                  }}
+                >
+                Modalità scheda
+              </div>
+              <div
+                style={{
+                  color: cinematicTypography.inkStrong,
+                  fontWeight: 800,
+                  fontFamily: cinematicTypography.displayFont,
+                  fontSize: 18,
+                }}
+              >
+                {editorStatusLabel}
+              </div>
+              <div style={{ color: cinematicTypography.inkMuted, fontSize: 13 }}>{editorStatusDescription}</div>
+            </div>
+
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                paddingBottom: 4,
+                borderBottom: "1px solid rgba(255,255,255,0.08)",
+              }}
+            >
+              <button type="button" onClick={() => setMode("read")} style={modeButtonStyle(mode === "read")}>
+                Lettura
+              </button>
+              <button type="button" onClick={() => setMode("edit")} style={modeButtonStyle(mode === "edit")}>
+                Modifica
+              </button>
+            </div>
+          </div>
+
           <div
             style={{
               display: "flex",
@@ -823,13 +1198,13 @@ export default function EntityEditor({
                   width: 62,
                   height: 62,
                   borderRadius: 18,
-                  background: `${accentColor}22`,
-                  border: `1px solid ${accentColor}44`,
+                  background: `${accentColor}18`,
+                  border: "1px solid rgba(255,255,255,0.08)",
                   display: "inline-flex",
                   alignItems: "center",
                   justifyContent: "center",
                   color: accentColor,
-                  boxShadow: `0 16px 32px ${accentColor}22`,
+                  boxShadow: `0 12px 28px rgba(0,0,0,0.22), 0 0 22px ${accentColor}20`,
                   flexShrink: 0,
                 }}
               >
@@ -839,17 +1214,17 @@ export default function EntityEditor({
               <div style={{ minWidth: 0, flex: 1, display: "grid", gap: 8 }}>
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                   <span
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
-                      padding: "6px 10px",
-                      borderRadius: 999,
-                      background: `${accentColor}20`,
-                      color: accentColor,
-                      border: `1px solid ${accentColor}33`,
-                      fontSize: 12,
-                      fontWeight: 800,
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "6px 10px",
+                        borderRadius: 999,
+                        background: "transparent",
+                        color: accentColor,
+                        border: `1px solid ${accentColor}28`,
+                        fontSize: 12,
+                        fontWeight: 800,
                       textTransform: "uppercase",
                       letterSpacing: "0.06em",
                     }}
@@ -868,19 +1243,22 @@ export default function EntityEditor({
                     onBlur={(e) => onUpdateEntity({ name: e.target.value })}
                     style={{
                       ...inputStyle,
-                      fontSize: 28,
+                      fontSize: 30,
                       fontWeight: 800,
                       padding: "10px 14px",
+                      fontFamily: cinematicTypography.displayFont,
                     }}
                   />
                 ) : (
                   <h2
                     style={{
                       margin: 0,
-                      fontSize: 30,
+                      fontSize: 34,
                       lineHeight: 1.1,
-                      color: "#f7f2e8",
+                      color: cinematicTypography.inkStrong,
                       textShadow: "0 6px 24px rgba(0,0,0,0.3)",
+                      fontFamily: cinematicTypography.displayFont,
+                      letterSpacing: "0.01em",
                     }}
                   >
                     {selectedEntity.name}
@@ -897,25 +1275,32 @@ export default function EntityEditor({
                     placeholder="Descrizione breve o pitch dell'entità"
                   />
                 ) : selectedEntity.shortDescription ? (
-                  <p style={{ margin: 0, color: "#e3d6bf", fontSize: 15, lineHeight: 1.65, maxWidth: 900 }}>
+                  <p
+                    style={{
+                      margin: 0,
+                      color: cinematicTypography.ink,
+                      fontSize: 15,
+                      lineHeight: 1.7,
+                      maxWidth: 900,
+                    }}
+                  >
                     {selectedEntity.shortDescription}
                   </p>
                 ) : null}
 
-                {selectedEntity.tags.length > 0 ? (
+                {visibleHeaderTags.length > 0 ? (
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    {selectedEntity.tags.map((tag) => (
+                    {visibleHeaderTags.map((tag) => (
                       <span
                         key={tag}
                         style={{
                           display: "inline-flex",
                           alignItems: "center",
                           gap: 6,
-                          padding: "7px 10px",
+                          padding: "6px 0",
                           borderRadius: 999,
-                          border: "1px solid rgba(203,181,138,0.22)",
-                          background: "rgba(30,27,23,0.72)",
-                          color: "#f3e9d4",
+                          border: "none",
+                          color: cinematicTypography.inkStrong,
                           fontSize: 12,
                           fontWeight: 700,
                         }}
@@ -924,28 +1309,61 @@ export default function EntityEditor({
                         {tag}
                       </span>
                     ))}
+                    {hiddenHeaderTagCount > 0 ? (
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          padding: "6px 0",
+                          borderRadius: 999,
+                          border: "none",
+                          color: cinematicTypography.inkMuted,
+                          fontSize: 12,
+                          fontWeight: 700,
+                        }}
+                      >
+                        +{hiddenHeaderTagCount} tag
+                      </span>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
             </div>
 
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "flex-end" }}>
-              <button type="button" onClick={() => setMode(mode === "read" ? "edit" : "read")} style={contextualActionButtonStyle}>
-                <uiIcons.edit size={15} />
-                {mode === "read" ? "Modifica" : "Chiudi modifica"}
-              </button>
+              {mode === "read" ? (
+                <button type="button" onClick={() => setMode("edit")} style={contextualActionButtonStyle}>
+                  <uiIcons.edit size={15} />
+                  Apri modifica
+                </button>
+              ) : null}
               <button type="button" onClick={onCenterInGraph} style={contextualActionButtonStyle}>
                 <Waypoints size={15} />
                 Centra nel grafo
               </button>
-              <button type="button" onClick={onDuplicateEntity} style={contextualActionButtonStyle}>
-                <uiIcons.duplicate size={15} />
-                Duplica
-              </button>
-              <button type="button" onClick={onDeleteEntity} style={{ ...dangerButtonStyle, padding: "10px 12px", fontSize: 13, display: "inline-flex", alignItems: "center", gap: 8 }}>
-                <uiIcons.delete size={15} />
-                Elimina
-              </button>
+              {mode === "edit" ? (
+                <>
+                  <button type="button" onClick={onDuplicateEntity} style={contextualActionButtonStyle}>
+                    <uiIcons.duplicate size={15} />
+                    Duplica
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onDeleteEntity}
+                    style={{
+                      ...dangerButtonStyle,
+                      padding: "10px 12px",
+                      fontSize: 13,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <uiIcons.delete size={15} />
+                    Elimina
+                  </button>
+                </>
+              ) : null}
             </div>
           </div>
 
@@ -953,7 +1371,7 @@ export default function EntityEditor({
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "minmax(0, 1.2fr) minmax(220px, 0.8fr)",
+                gridTemplateColumns: isCompactEditor ? "1fr" : "minmax(0, 1.2fr) minmax(220px, 0.8fr)",
                 gap: 14,
               }}
             >
@@ -990,8 +1408,284 @@ export default function EntityEditor({
         </div>
       </div>
 
+      {mode === "read" ? (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: isNarrowEditor ? "1fr" : "minmax(0, 1.35fr) minmax(280px, 0.9fr)",
+            gap: 24,
+            paddingBottom: 4,
+            borderBottom: "1px solid rgba(255,255,255,0.08)",
+          }}
+        >
+          <div
+            style={{
+              display: "grid",
+              gap: 14,
+              paddingRight: isNarrowEditor ? 0 : 10,
+            }}
+          >
+            <div style={{ display: "grid", gap: 6 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.08em",
+                  color: cinematicTypography.inkSoft,
+                  fontWeight: 800,
+                }}
+              >
+                Colpo d'occhio
+              </div>
+              <div
+                style={{
+                  color: cinematicTypography.inkStrong,
+                  fontSize: 28,
+                  fontWeight: 800,
+                  lineHeight: 1.18,
+                  fontFamily: cinematicTypography.displayFont,
+                }}
+              >
+                {selectedEntity.shortDescription || narrativeTemplate.lead}
+              </div>
+            </div>
+
+            <div style={{ color: cinematicTypography.ink, lineHeight: 1.8, fontSize: 15 }}>
+              {selectedEntity.notes?.trim()
+                ? `${selectedEntity.notes.trim().slice(0, 260)}${selectedEntity.notes.trim().length > 260 ? "..." : ""}`
+                : "Apri la sezione lore per aggiungere storia, dettagli o appunti narrativi estesi."}
+            </div>
+
+            {narrativeTemplate.relationshipHighlights.length > 0 ? (
+              <div style={{ display: "grid", gap: 8 }}>
+                <div style={{ ...fieldLabelStyle, marginBottom: 0 }}>Legami che emergono subito</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {narrativeTemplate.relationshipHighlights.map((item) => (
+                    <span
+                      key={item}
+                      style={{
+                        padding: "8px 10px",
+                        borderRadius: 999,
+                        background: `${accentColor}16`,
+                        border: `1px solid ${accentColor}30`,
+                        color: cinematicTypography.inkStrong,
+                        fontSize: 13,
+                      }}
+                    >
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gap: 12,
+              paddingLeft: isNarrowEditor ? 0 : 18,
+              borderLeft: isNarrowEditor ? "none" : "1px solid rgba(255,255,255,0.08)",
+            }}
+          >
+            <div style={{ display: "grid", gap: 4 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.08em",
+                  color: cinematicTypography.inkSoft,
+                  fontWeight: 800,
+                }}
+              >
+                Scheda rapida
+              </div>
+              <div style={{ color: cinematicTypography.inkMuted, fontSize: 13, lineHeight: 1.55 }}>
+                I dettagli che aiutano a orientarsi subito dentro il mondo.
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 10 }}>
+                {heroHighlights.map((item) => (
+                  <div
+                    key={`${item.label}-${item.value}`}
+                    style={{
+                      display: "grid",
+                      gap: 4,
+                      padding: "0 0 10px",
+                      borderBottom: "1px solid rgba(255,255,255,0.08)",
+                    }}
+                  >
+                  <div
+                    style={{
+                        fontSize: 11,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                        color: cinematicTypography.inkSoft,
+                        fontWeight: 800,
+                      }}
+                    >
+                    {item.label}
+                  </div>
+                  <div style={{ color: cinematicTypography.inkStrong, fontWeight: 700, lineHeight: 1.45 }}>
+                    {item.value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 20,
+          alignItems: "flex-start",
+          paddingBottom: 8,
+          borderBottom: "1px solid rgba(255,255,255,0.08)",
+        }}
+      >
+        <div
+          style={{
+            minWidth: 220,
+            display: "grid",
+            gap: 6,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              color: cinematicTypography.inkSoft,
+              fontWeight: 800,
+            }}
+          >
+            Focus scheda
+          </div>
+          <div
+            style={{
+              fontSize: 20,
+              fontWeight: 800,
+              color: cinematicTypography.inkStrong,
+              lineHeight: 1.15,
+              fontFamily: cinematicTypography.displayFont,
+            }}
+          >
+            {mode === "edit" ? "Aggiornamento in corso" : "Panoramica narrativa"}
+          </div>
+          <div style={{ color: cinematicTypography.inkMuted, fontSize: 12, lineHeight: 1.5 }}>
+            {mode === "edit"
+              ? "Tipo, cover, tag e metadati diventano modificabili direttamente."
+              : "Le informazioni principali restano in evidenza; i dettagli secondari restano più discreti."}
+          </div>
+        </div>
+
+        {workspaceSummaryCards.map((card) => (
+          <div
+            key={card.label}
+            style={{
+              paddingLeft: 18,
+              borderLeft: "1px solid rgba(255,255,255,0.08)",
+              display: "grid",
+              gap: 6,
+              minWidth: 170,
+              flex: isCompactEditor ? "1 1 100%" : "0 1 180px",
+            }}
+          >
+            <div
+              style={{
+                fontSize: 11,
+                textTransform: "uppercase",
+                letterSpacing: "0.08em",
+                color: cinematicTypography.inkSoft,
+                fontWeight: 800,
+              }}
+            >
+              {card.label}
+            </div>
+            <div
+              style={{
+                fontSize: 24,
+                fontWeight: 800,
+                color: cinematicTypography.inkStrong,
+                lineHeight: 1,
+                fontFamily: cinematicTypography.displayFont,
+              }}
+            >
+              {card.value}
+            </div>
+            <div style={{ color: cinematicTypography.inkMuted, fontSize: 12, lineHeight: 1.5 }}>
+              {card.helper}
+            </div>
+          </div>
+        ))}
+      </div>
+
       <CollapsibleSection
-        title="Descrizione"
+        title="Lettura narrativa"
+        accentColor={accentColor}
+        icon={<Sparkles size={16} color={accentColor} />}
+        rightSlot={
+          <span style={{ color: "#b89c63", fontSize: 12, fontWeight: 700 }}>
+            template {typeLabel.toLowerCase()}
+          </span>
+        }
+      >
+        <div
+          style={{
+            color: "#e7dcc8",
+            lineHeight: 1.75,
+            fontSize: 15,
+          }}
+        >
+          {narrativeTemplate.lead}
+        </div>
+
+        {narrativeTemplate.cards.length > 0 ? (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: 12,
+            }}
+          >
+            {narrativeTemplate.cards.map((card) => (
+              <MetadataReadCard key={card.label} label={card.label} value={card.value} />
+            ))}
+          </div>
+        ) : null}
+
+        <div style={{ display: "grid", gap: 8 }}>
+          <div style={{ ...fieldLabelStyle, marginBottom: 0 }}>Legami chiave</div>
+          {narrativeTemplate.relationshipHighlights.length > 0 ? (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {narrativeTemplate.relationshipHighlights.map((item) => (
+                <span
+                  key={item}
+                  style={{
+                    padding: "8px 10px",
+                    borderRadius: 999,
+                    background: `${accentColor}16`,
+                    border: `1px solid ${accentColor}30`,
+                    color: "#e8eef8",
+                    fontSize: 13,
+                  }}
+                >
+                  {item}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div style={{ color: "#9fb0c7" }}>Nessun legame narrativo evidenziato.</div>
+          )}
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Lore e note"
         accentColor={accentColor}
         icon={<ScrollText size={16} color={accentColor} />}
       >
@@ -1018,9 +1712,10 @@ export default function EntityEditor({
       </CollapsibleSection>
 
       <CollapsibleSection
-        title="Metadati custom"
+        title="Dettagli del template"
         accentColor={accentColor}
         icon={<Sparkles size={16} color={accentColor} />}
+        defaultOpen={mode === "edit" || metadataPreview.length > 0}
         rightSlot={
           <span style={{ color: "#b89c63", fontSize: 12, fontWeight: 700 }}>
             {metadataPreview.length} compilati
@@ -1030,31 +1725,69 @@ export default function EntityEditor({
         {metadataFields.length === 0 ? (
           <div style={{ color: "#9fb0c7" }}>Questo tipo di entità non ha ancora campi custom.</div>
         ) : mode === "edit" ? (
-          <div style={{ display: "grid", gap: 14 }}>
-            {metadataFields.map((field) => (
-              <div key={field.key} style={{ display: "grid", gap: 8 }}>
-                <label style={fieldLabelStyle}>{field.label}</label>
-                {renderMetadataInput({
-                  field,
-                  value: metadata[field.key] ?? "",
-                  selectedEntity,
-                  entities,
-                  entityTypes,
-                  onChange: (value, options) => onUpdateMetadataField(field.key, value, options),
-                })}
+          <div style={{ display: "grid", gap: 18 }}>
+            {groupedMetadataFields.map((group) => (
+              <div
+                key={group.id}
+                style={{
+                  display: "grid",
+                  gap: 14,
+                  paddingTop: "12px",
+                  borderTop: "1px solid rgba(255,255,255,0.08)",
+                }}
+              >
+                <div style={{ display: "grid", gap: 4 }}>
+                  <div style={{ color: "#f7f2e8", fontWeight: 800 }}>{group.label}</div>
+                  <div style={{ color: "#9fb0c7", fontSize: 12, lineHeight: 1.5 }}>{group.description}</div>
+                </div>
+
+                <div style={{ display: "grid", gap: 14 }}>
+                  {group.items.map(({ field }) => (
+                    <div key={field.key} style={{ display: "grid", gap: 8 }}>
+                      <label style={fieldLabelStyle}>{field.label}</label>
+                      {renderMetadataInput({
+                        field,
+                        value: metadata[field.key] ?? "",
+                        selectedEntity,
+                        entities,
+                        entityTypes,
+                        onChange: (value, options) => onUpdateMetadataField(field.key, value, options),
+                      })}
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
         ) : metadataPreview.length > 0 ? (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              gap: 12,
-            }}
-          >
-            {metadataPreview.map(({ field, value }) => (
-              <MetadataReadCard key={field.key} label={field.label} value={value} />
+          <div style={{ display: "grid", gap: 18 }}>
+            {groupedMetadataPreview.map((group) => (
+              <div
+                key={group.id}
+                style={{
+                  display: "grid",
+                  gap: 12,
+                  paddingTop: "12px",
+                  borderTop: "1px solid rgba(255,255,255,0.08)",
+                }}
+              >
+                <div style={{ display: "grid", gap: 4 }}>
+                  <div style={{ color: "#f7f2e8", fontWeight: 800 }}>{group.label}</div>
+                  <div style={{ color: "#9fb0c7", fontSize: 12, lineHeight: 1.5 }}>{group.description}</div>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                    gap: 12,
+                  }}
+                >
+                  {group.items.map(({ field, value }) => (
+                    <MetadataReadCard key={field.key} label={field.label} value={value} />
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
         ) : (
@@ -1067,6 +1800,7 @@ export default function EntityEditor({
         title="Statistiche D&D"
         accentColor={accentColor}
         icon={<Shield size={16} color={accentColor} />}
+        defaultOpen={false}
       >
         {mode === "edit" ? (
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -1182,7 +1916,7 @@ export default function EntityEditor({
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
+                gridTemplateColumns: isCompactEditor ? "repeat(3, minmax(0, 1fr))" : "repeat(6, minmax(0, 1fr))",
                 gap: 10,
               }}
             >
@@ -1190,11 +1924,8 @@ export default function EntityEditor({
                 <div
                   key={field.key}
                   style={{
-                    padding: "14px 10px",
-                    borderRadius: 16,
-                    border: "1px solid rgba(167,139,78,0.14)",
-                    background:
-                      "linear-gradient(180deg, rgba(27,23,18,0.95) 0%, rgba(14,15,18,0.98) 100%)",
+                    padding: "10px 0",
+                    borderBottom: "1px solid rgba(255,255,255,0.08)",
                     display: "grid",
                     gap: 6,
                     justifyItems: "center",
@@ -1228,51 +1959,66 @@ export default function EntityEditor({
       </CollapsibleSection>
 
       <CollapsibleSection
-        title="Relazioni in uscita"
+        title="Relazioni chiave"
         accentColor={accentColor}
         icon={<Link2 size={16} color={accentColor} />}
+        rightSlot={
+          <span style={{ color: "#b89c63", fontSize: 12, fontWeight: 700 }}>
+            {outgoingRelations.length + incomingRelations.length} totali
+          </span>
+        }
       >
-        {outgoingRelations.length > 0 ? (
-          <div style={{ display: "grid", gap: 10 }}>
-            {outgoingRelations.map((item) => (
-              <NarrativeRelationCard
-                key={item.relation.id}
-                item={item}
-                onOpenEntity={onOpenEntity}
-                entityTypes={entityTypes}
-              />
-            ))}
-          </div>
-        ) : (
-          <div style={{ color: "#9fb0c7" }}>Nessuna relazione in uscita.</div>
-        )}
-      </CollapsibleSection>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            gap: 14,
+          }}
+        >
+          {relationSections.map((section) => (
+            <div
+              key={section.id}
+              style={{
+                display: "grid",
+                gap: 10,
+                paddingTop: "12px",
+                borderTop: "1px solid rgba(255,255,255,0.08)",
+              }}
+            >
+              <div style={{ display: "grid", gap: 4 }}>
+                <div style={{ color: "#f7f2e8", fontWeight: 800 }}>{section.label}</div>
+                <div style={{ color: "#9fb0c7", fontSize: 12 }}>{section.caption}</div>
+              </div>
 
-      <CollapsibleSection
-        title="Relazioni in entrata"
-        accentColor={accentColor}
-        icon={<uiIcons.relations size={16} color={accentColor} />}
-      >
-        {incomingRelations.length > 0 ? (
-          <div style={{ display: "grid", gap: 10 }}>
-            {incomingRelations.map((item) => (
-              <NarrativeRelationCard
-                key={item.relation.id}
-                item={item}
-                onOpenEntity={onOpenEntity}
-                entityTypes={entityTypes}
-              />
-            ))}
-          </div>
-        ) : (
-          <div style={{ color: "#9fb0c7" }}>Nessuna relazione in entrata.</div>
-        )}
+              {section.items.length > 0 ? (
+                <div style={{ display: "grid", gap: 10 }}>
+                  {section.items.map((item) => (
+                    <NarrativeRelationCard
+                      key={item.relation.id}
+                      item={item}
+                      onOpenEntity={onOpenEntity}
+                      entityTypes={entityTypes}
+                    />
+                  ))}
+                  {section.total > section.items.length ? (
+                    <div style={{ color: "#9fb0c7", fontSize: 12 }}>
+                      +{section.total - section.items.length} altre relazioni nel pannello laterale.
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <div style={{ color: "#9fb0c7" }}>{section.emptyText}</div>
+              )}
+            </div>
+          ))}
+        </div>
       </CollapsibleSection>
 
       <CollapsibleSection
         title="Timeline / cronologia"
         accentColor={accentColor}
         icon={<uiIcons.timeline size={16} color={accentColor} />}
+        defaultOpen={false}
       >
         <div
           style={{
@@ -1291,6 +2037,7 @@ export default function EntityEditor({
         title="Tag e immagini"
         accentColor={accentColor}
         icon={<Camera size={16} color={accentColor} />}
+        defaultOpen={false}
       >
         <div style={{ display: "grid", gap: 16 }}>
           <div>
@@ -1352,13 +2099,15 @@ export default function EntityEditor({
                       width: "100%",
                       maxHeight: "70vh",
                       borderRadius: 18,
-                      border: "1px solid rgba(167,139,78,0.18)",
-                      background: "rgba(0,0,0,0.25)",
+                      border: "1px solid rgba(255,255,255,0.08)",
+                      background: "rgba(255,255,255,0.04)",
                       overflow: "hidden",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
                       padding: 12,
+                      backdropFilter: "blur(18px)",
+                      WebkitBackdropFilter: "blur(18px)",
                     }}
                   >
                     <img
@@ -1393,16 +2142,20 @@ export default function EntityEditor({
                 style={{
                   padding: "18px",
                   borderRadius: 18,
-                  border: "1px dashed rgba(167,139,78,0.28)",
-                  background: "rgba(28,24,20,0.65)",
+                  border: "1px dashed rgba(255,255,255,0.12)",
+                  background: "rgba(255,255,255,0.04)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "space-between",
                   gap: 12,
                   flexWrap: "wrap",
+                  backdropFilter: "blur(18px)",
+                  WebkitBackdropFilter: "blur(18px)",
                 }}
               >
-                <div style={{ color: "#d7c9ad" }}>Aggiungi una cover o un riferimento visivo.</div>
+                <div style={{ color: cinematicTypography.ink }}>
+                  Aggiungi una cover o un riferimento visivo.
+                </div>
                 <button type="button" style={primaryButtonStyle} onClick={() => fileInputRef.current?.click()}>
                   {isUploadingImage ? "Caricamento..." : "Carica immagine"}
                 </button>
@@ -1466,6 +2219,7 @@ export default function EntityEditor({
           </div>
         </div>
       ) : null}
+      </div>
     </div>
   );
 }

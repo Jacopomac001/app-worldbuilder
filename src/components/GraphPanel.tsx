@@ -25,8 +25,10 @@ import {
   UI_TEXT,
 } from "../config";
 import {
+  cinematicTypography,
+  ghostButtonStyle,
+  inputStyle,
   modeButtonStyle,
-  panelStyle,
   selectStyle,
   typeToggleStyle,
 } from "../styles";
@@ -35,8 +37,13 @@ import { getEntityTypeLabel, getTypeColor } from "../utils/entity";
 
 export type GraphViewMode = "focused" | "global" | "type-only" | "tag-based";
 export type FocusedGraphFilter = "all" | "outgoing" | "incoming";
+export type GraphNeighborhoodDepth = 1 | 2 | 3;
 export type GraphLayoutMode = "auto" | "free" | "map";
-type GraphClusterMode = "none" | "region" | "faction" | "genealogy";
+type GraphClusterMode = "none" | "region" | "faction" | "genealogy" | "storyline";
+type GraphDetailMode = "full" | "compact";
+type GraphNodeLimit = 120 | 240 | "all";
+type GraphRelationFamily = "political" | "genealogy" | "geography" | "event" | "neutral";
+type GraphPresetId = "focus" | "political" | "genealogy" | "events" | "factions";
 
 type ManualNodePosition = { x: number; y: number };
 type ManualNodePositionMap = Record<string, ManualNodePosition>;
@@ -54,6 +61,8 @@ type GraphNodeData = {
   isDimmed?: boolean;
   level?: 0 | 1 | 2;
   metaLabel?: string;
+  compact?: boolean;
+  density?: "normal" | "dense" | "overloaded";
 };
 
 type ClusterBackgroundData = {
@@ -64,6 +73,10 @@ type ClusterBackgroundData = {
 
 type GraphEdgeData = {
   relationLabel?: string;
+  showLabel?: boolean;
+  family?: GraphRelationFamily;
+  emphasis?: "focus" | "context" | "ambient";
+  density?: "normal" | "dense" | "overloaded";
 };
 
 type GraphPanelProps = {
@@ -73,6 +86,9 @@ type GraphPanelProps = {
   graphTypeFilters: Record<EntityType, boolean>;
   graphViewType: "all" | EntityType;
   graphViewTag: string;
+  graphSearch: string;
+  graphRelationFilter: string;
+  graphNeighborhoodDepth: GraphNeighborhoodDepth;
   allTags: string[];
   selectedEntityId: string;
   graphData: {
@@ -84,6 +100,9 @@ type GraphPanelProps = {
   onToggleGraphTypeFilter: (type: EntityType) => void;
   onGraphViewTypeChange: (value: "all" | EntityType) => void;
   onGraphViewTagChange: (value: string) => void;
+  onGraphSearchChange: (value: string) => void;
+  onGraphRelationFilterChange: (value: string) => void;
+  onGraphNeighborhoodDepthChange: (value: GraphNeighborhoodDepth) => void;
   onNodeClick: (entityId: string) => void;
   getEntityById: (id: string) => Entity | undefined;
   compactControlsOnly?: boolean;
@@ -93,6 +112,9 @@ type GraphPanelProps = {
 const GRAPH_LAYOUT_MODE_STORAGE_KEY = "worldbuilder_graph_layout_mode_v2";
 const GRAPH_CLUSTER_MODE_STORAGE_KEY = "worldbuilder_graph_cluster_mode_v2";
 const GRAPH_NODE_POSITIONS_STORAGE_KEY = "worldbuilder_graph_manual_positions_v2";
+const GRAPH_DETAIL_MODE_STORAGE_KEY = "worldbuilder_graph_detail_mode_v1";
+const GRAPH_NODE_LIMIT_STORAGE_KEY = "worldbuilder_graph_node_limit_v1";
+const GRAPH_COLLAPSED_CLUSTERS_STORAGE_KEY = "worldbuilder_graph_collapsed_clusters_v1";
 
 function safeStorageGet(key: string): string | null {
   try {
@@ -117,7 +139,9 @@ function readStoredLayoutMode(): GraphLayoutMode {
 
 function readStoredClusterMode(): GraphClusterMode {
   const raw = safeStorageGet(GRAPH_CLUSTER_MODE_STORAGE_KEY);
-  return raw === "region" || raw === "faction" || raw === "genealogy" ? raw : "none";
+  return raw === "region" || raw === "faction" || raw === "genealogy" || raw === "storyline"
+    ? raw
+    : "none";
 }
 
 function readStoredManualPositions(): ManualNodePositionMap {
@@ -140,16 +164,46 @@ function readStoredManualPositions(): ManualNodePositionMap {
   }
 }
 
+function readStoredDetailMode(): GraphDetailMode {
+  return safeStorageGet(GRAPH_DETAIL_MODE_STORAGE_KEY) === "compact" ? "compact" : "full";
+}
+
+function readStoredNodeLimit(): GraphNodeLimit {
+  const raw = safeStorageGet(GRAPH_NODE_LIMIT_STORAGE_KEY);
+  if (raw === "120") return 120;
+  if (raw === "240") return 240;
+  return "all";
+}
+
+function readStoredCollapsedClusters(): Partial<Record<GraphClusterMode, string[]>> {
+  try {
+    const raw = safeStorageGet(GRAPH_COLLAPSED_CLUSTERS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object"
+      ? (parsed as Partial<Record<GraphClusterMode, string[]>>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 type SharedGraphState = {
   layoutMode: GraphLayoutMode;
   clusterMode: GraphClusterMode;
   manualNodePositions: ManualNodePositionMap;
+  detailMode: GraphDetailMode;
+  nodeLimit: GraphNodeLimit;
+  collapsedClusters: Partial<Record<GraphClusterMode, string[]>>;
 };
 
 const sharedGraphState: SharedGraphState = {
   layoutMode: readStoredLayoutMode(),
   clusterMode: readStoredClusterMode(),
   manualNodePositions: readStoredManualPositions(),
+  detailMode: readStoredDetailMode(),
+  nodeLimit: readStoredNodeLimit(),
+  collapsedClusters: readStoredCollapsedClusters(),
 };
 
 const sharedListeners = new Set<() => void>();
@@ -170,6 +224,12 @@ function updateSharedGraphState(patch: Partial<SharedGraphState>) {
 
   safeStorageSet(GRAPH_LAYOUT_MODE_STORAGE_KEY, sharedGraphState.layoutMode);
   safeStorageSet(GRAPH_CLUSTER_MODE_STORAGE_KEY, sharedGraphState.clusterMode);
+  safeStorageSet(GRAPH_DETAIL_MODE_STORAGE_KEY, sharedGraphState.detailMode);
+  safeStorageSet(GRAPH_NODE_LIMIT_STORAGE_KEY, String(sharedGraphState.nodeLimit));
+  safeStorageSet(
+    GRAPH_COLLAPSED_CLUSTERS_STORAGE_KEY,
+    JSON.stringify(sharedGraphState.collapsedClusters)
+  );
   safeStorageSet(
     GRAPH_NODE_POSITIONS_STORAGE_KEY,
     JSON.stringify(sharedGraphState.manualNodePositions)
@@ -214,6 +274,12 @@ function getClusterAccent(clusterMode: GraphClusterMode, label: string): string 
 
   if (clusterMode === "genealogy") {
     const palette = ["#f59e0b", "#fb7185", "#c084fc", "#60a5fa", "#34d399", "#f97316"];
+    const index = Array.from(label).reduce((acc, char) => acc + char.charCodeAt(0), 0) % palette.length;
+    return palette[index];
+  }
+
+  if (clusterMode === "storyline") {
+    const palette = ["#38bdf8", "#f59e0b", "#34d399", "#fb7185", "#c084fc", "#f97316"];
     const index = Array.from(label).reduce((acc, char) => acc + char.charCodeAt(0), 0) % palette.length;
     return palette[index];
   }
@@ -580,6 +646,48 @@ function buildClusterKeyMap(
     return labelsById;
   }
 
+  if (clusterMode === "storyline") {
+    context.entitiesById.forEach((entity, entityId) => {
+      const metadataStoryline =
+        pickFirstMetadataValue(entity, [
+          "storyline",
+          "story",
+          "plot",
+          "trama",
+          "arco",
+          "arc",
+          "campagna",
+          "questline",
+        ]) || "";
+
+      const tagStoryline =
+        entity.tags.find((tag) => {
+          const normalized = normalizeText(tag);
+          return (
+            normalized.startsWith("story:") ||
+            normalized.startsWith("storyline:") ||
+            normalized.startsWith("arco:") ||
+            normalized.startsWith("plot:")
+          );
+        }) ??
+        entity.tags.find((tag) => {
+          const normalized = normalizeText(tag);
+          return (
+            normalized.includes("story") ||
+            normalized.includes("trama") ||
+            normalized.includes("quest") ||
+            normalized.includes("capitolo") ||
+            normalized.includes("atto")
+          );
+        }) ??
+        entity.tags[0] ??
+        "";
+
+      labelsById[entityId] = metadataStoryline || tagStoryline || "Storyline libera";
+    });
+    return labelsById;
+  }
+
   context.entitiesById.forEach((entity, entityId) => {
     labelsById[entityId] =
       pickFirstMetadataValue(entity, [
@@ -800,21 +908,127 @@ function getTypeGlyph(entityType: EntityType) {
 function getNodeShape(entityType: EntityType) {
   const normalized = String(entityType).toLowerCase();
   if (normalized.includes("luog") || normalized.includes("place") || normalized.includes("region")) {
-    return { width: 292, minHeight: 110, radius: 22, orientation: "wide" as const };
+    return { width: 276, minHeight: 104, radius: 22, orientation: "wide" as const };
   }
   if (normalized.includes("person") || normalized.includes("char") || normalized.includes("npc")) {
-    return { width: 228, minHeight: 132, radius: 22, orientation: "tall" as const };
+    return { width: 218, minHeight: 124, radius: 22, orientation: "tall" as const };
   }
   if (normalized.includes("fazi") || normalized.includes("faction") || normalized.includes("clan")) {
-    return { width: 252, minHeight: 118, radius: 20, orientation: "badge" as const };
+    return { width: 236, minHeight: 110, radius: 20, orientation: "badge" as const };
   }
   if (normalized.includes("ogg") || normalized.includes("item") || normalized.includes("artifact")) {
-    return { width: 204, minHeight: 92, radius: 18, orientation: "compact" as const };
+    return { width: 188, minHeight: 88, radius: 18, orientation: "compact" as const };
   }
   if (normalized.includes("event") || normalized.includes("evento") || normalized.includes("storia")) {
-    return { width: 270, minHeight: 96, radius: 999, orientation: "timeline" as const };
+    return { width: 250, minHeight: 92, radius: 999, orientation: "timeline" as const };
   }
-  return { width: 240, minHeight: 104, radius: 20, orientation: "default" as const };
+  return { width: 226, minHeight: 98, radius: 20, orientation: "default" as const };
+}
+
+function getNodeSemanticTone(entityType: EntityType) {
+  const normalized = String(entityType).toLowerCase();
+  if (normalized.includes("luog") || normalized.includes("place") || normalized.includes("region")) {
+    return {
+      familyLabel: "Geografia",
+        surface: "linear-gradient(180deg, rgba(15,29,40,0.46) 0%, rgba(9,16,24,0.28) 100%)",
+        overlay: "radial-gradient(circle at 18% 18%, rgba(56,189,248,0.18) 0%, transparent 38%), linear-gradient(135deg, rgba(255,255,255,0.06) 0%, transparent 58%)",
+    };
+  }
+  if (normalized.includes("person") || normalized.includes("char") || normalized.includes("npc")) {
+    return {
+      familyLabel: "Personaggio",
+        surface: "linear-gradient(180deg, rgba(41,20,28,0.44) 0%, rgba(18,12,18,0.28) 100%)",
+        overlay: "radial-gradient(circle at 18% 18%, rgba(251,113,133,0.18) 0%, transparent 38%), linear-gradient(135deg, rgba(255,255,255,0.06) 0%, transparent 58%)",
+    };
+  }
+  if (normalized.includes("fazi") || normalized.includes("faction") || normalized.includes("clan")) {
+    return {
+      familyLabel: "Fazione",
+        surface: "linear-gradient(180deg, rgba(44,28,12,0.44) 0%, rgba(18,14,10,0.28) 100%)",
+        overlay: "radial-gradient(circle at 18% 18%, rgba(245,158,11,0.18) 0%, transparent 38%), linear-gradient(135deg, rgba(255,255,255,0.06) 0%, transparent 58%)",
+    };
+  }
+  if (normalized.includes("ogg") || normalized.includes("item") || normalized.includes("artifact")) {
+    return {
+      familyLabel: "Oggetto",
+        surface: "linear-gradient(180deg, rgba(14,34,28,0.44) 0%, rgba(9,20,18,0.28) 100%)",
+        overlay: "radial-gradient(circle at 18% 18%, rgba(52,211,153,0.18) 0%, transparent 38%), linear-gradient(135deg, rgba(255,255,255,0.06) 0%, transparent 58%)",
+    };
+  }
+  if (normalized.includes("event") || normalized.includes("evento") || normalized.includes("storia")) {
+    return {
+      familyLabel: "Evento",
+        surface: "linear-gradient(180deg, rgba(28,20,44,0.45) 0%, rgba(13,11,23,0.28) 100%)",
+        overlay: "radial-gradient(circle at 18% 18%, rgba(167,139,250,0.18) 0%, transparent 38%), linear-gradient(135deg, rgba(255,255,255,0.06) 0%, transparent 58%)",
+    };
+  }
+  return {
+    familyLabel: "Entità",
+    surface: "linear-gradient(180deg, rgba(18,22,30,0.44) 0%, rgba(9,13,19,0.28) 100%)",
+    overlay: "radial-gradient(circle at 18% 18%, rgba(148,163,184,0.16) 0%, transparent 38%), linear-gradient(135deg, rgba(255,255,255,0.06) 0%, transparent 55%)",
+  };
+}
+
+function classifyRelationFamily(label: string): GraphRelationFamily {
+  const normalized = normalizeRelationLabel(label);
+  if (!normalized) return "neutral";
+  if (
+    normalized.includes("figlio") ||
+    normalized.includes("madre") ||
+    normalized.includes("padre") ||
+    normalized.includes("coniuge") ||
+    normalized.includes("discende") ||
+    normalized.includes("famiglia")
+  ) {
+    return "genealogy";
+  }
+  if (
+    normalized.includes("controlla") ||
+    normalized.includes("governa") ||
+    normalized.includes("leader") ||
+    normalized.includes("membro") ||
+    normalized.includes("alleato") ||
+    normalized.includes("nemico")
+  ) {
+    return "political";
+  }
+  if (
+    normalized.includes("abita") ||
+    normalized.includes("vive") ||
+    normalized.includes("si trova") ||
+    normalized.includes("ospita") ||
+    normalized.includes("territorio") ||
+    normalized.includes("proviene")
+  ) {
+    return "geography";
+  }
+  if (
+    normalized.includes("svolge") ||
+    normalized.includes("caus") ||
+    normalized.includes("inizia") ||
+    normalized.includes("termina") ||
+    normalized.includes("distrutto") ||
+    normalized.includes("evento")
+  ) {
+    return "event";
+  }
+  return "neutral";
+}
+
+function getRelationFamilyTheme(family: GraphRelationFamily) {
+  if (family === "political") {
+    return { accent: "#f59e0b", dash: "8 4", label: "Politica" };
+  }
+  if (family === "genealogy") {
+    return { accent: "#fb7185", dash: undefined, label: "Genealogia" };
+  }
+  if (family === "geography") {
+    return { accent: "#38bdf8", dash: "2 0", label: "Geografia" };
+  }
+  if (family === "event") {
+    return { accent: "#a78bfa", dash: "5 6", label: "Eventi" };
+  }
+  return { accent: "#94a3b8", dash: "3 5", label: "Generale" };
 }
 
 function GraphAutoFocus({
@@ -833,19 +1047,21 @@ function GraphAutoFocus({
 
     const targetNode = nodes.find((node) => String(node.id) === selectedEntityId);
     if (!targetNode) {
+      const fitPadding = nodes.length > 180 ? 0.38 : nodes.length > 100 ? 0.3 : 0.22;
       window.requestAnimationFrame(() => {
-        reactFlow.fitView({ padding: 0.18, duration: 320, includeHiddenNodes: true });
+        reactFlow.fitView({ padding: fitPadding, duration: 380, includeHiddenNodes: true });
       });
       return;
     }
 
     const width = typeof targetNode.width === "number" ? targetNode.width : 240;
     const height = typeof targetNode.height === "number" ? targetNode.height : 100;
+    const targetZoom = nodes.length > 180 ? 0.86 : nodes.length > 100 ? 0.96 : 1.08;
 
     window.requestAnimationFrame(() => {
       reactFlow.setCenter(targetNode.position.x + width / 2, targetNode.position.y + height / 2, {
-        zoom: 1.05,
-        duration: 320,
+        zoom: targetZoom,
+        duration: 420,
       });
     });
   }, [reactFlow, selectedEntityId, nodes, layoutMode]);
@@ -857,24 +1073,30 @@ function WorldNode({ data }: NodeProps<Node<GraphNodeData>>) {
   const [isHovered, setIsHovered] = useState(false);
   const accent = data.accentColor ?? "#64748b";
   const shape = getNodeShape(data.entityType);
+  const tone = getNodeSemanticTone(data.entityType);
   const isSelected = Boolean(data.isSelected);
   const isConnected = Boolean(data.isConnectedToSelection);
   const isDimmed = Boolean(data.isDimmed);
   const level = data.level ?? 1;
+  const compact = Boolean(data.compact);
+  const density = data.density ?? "normal";
+  const denseOpacity = density === "overloaded" ? 0.14 : density === "dense" ? 0.22 : 0.3;
+  const lift = isSelected ? -8 : isHovered ? -4 : isConnected ? -2 : 0;
+  const scale = isSelected ? 1.035 : isConnected ? 1.012 : density === "overloaded" && isDimmed ? 0.985 : 1;
 
   const border = isSelected
-    ? `1px solid ${accent}`
+    ? `1px solid ${accent}88`
     : isConnected
-    ? `1px solid ${accent}80`
+    ? `1px solid ${accent}4a`
     : level === 2
-    ? "1px dashed rgba(255,255,255,0.18)"
-    : "1px solid rgba(255,255,255,0.12)";
+    ? "1px dashed rgba(255,255,255,0.12)"
+    : "1px solid rgba(255,255,255,0.08)";
 
   const shadow = isSelected
-    ? `0 0 0 1px ${accent}66, 0 20px 48px ${accent}34`
+    ? `0 18px 40px rgba(0,0,0,0.24), 0 0 32px ${accent}18, inset 0 1px 0 rgba(255,255,255,0.14)`
     : isConnected
-    ? `0 0 0 1px ${accent}33, 0 16px 34px rgba(0,0,0,0.28)`
-    : "0 14px 30px rgba(0,0,0,0.22)";
+    ? `0 14px 30px rgba(0,0,0,0.22), 0 0 24px ${accent}12, inset 0 1px 0 rgba(255,255,255,0.1)`
+    : "0 14px 28px rgba(0,0,0,0.16), inset 0 1px 0 rgba(255,255,255,0.08)";
 
   return (
     <div
@@ -883,9 +1105,10 @@ function WorldNode({ data }: NodeProps<Node<GraphNodeData>>) {
       style={{
         width: shape.width,
         minHeight: shape.minHeight,
-        opacity: isDimmed ? 0.3 : 1,
-        transition: "opacity 160ms ease, transform 160ms ease",
-        transform: isHovered ? "translateY(-2px)" : "translateY(0)",
+        opacity: isDimmed ? denseOpacity : isConnected && density !== "normal" ? 0.94 : 1,
+        transition: "opacity 220ms ease, transform 280ms ease, filter 280ms ease",
+        transform: `translateY(${lift}px) scale(${scale})`,
+        filter: isSelected ? "saturate(1.08)" : isConnected ? "saturate(1.02)" : "none",
       }}
     >
       <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
@@ -893,25 +1116,28 @@ function WorldNode({ data }: NodeProps<Node<GraphNodeData>>) {
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
 
-      {isHovered && data.shortDescription ? (
+      {isHovered && data.shortDescription && !compact ? (
         <div
           style={{
             position: "absolute",
             left: "50%",
             bottom: "calc(100% + 12px)",
             transform: "translateX(-50%)",
-            width: 290,
-            maxWidth: 290,
+            width: 274,
+            maxWidth: 274,
             zIndex: 40,
-            borderRadius: 14,
-            border: `1px solid ${accent}55`,
-            background: "rgba(5, 10, 20, 0.96)",
+            borderRadius: 16,
+            border: `1px solid ${accent}30`,
+            background: "rgba(10,14,21,0.52)",
             padding: "12px 14px",
-            boxShadow: "0 20px 48px rgba(0,0,0,0.42)",
+            boxShadow: `0 18px 36px rgba(0,0,0,0.28), 0 0 22px ${accent}14`,
+            backdropFilter: "blur(18px)",
+            WebkitBackdropFilter: "blur(18px)",
             pointerEvents: "none",
+            fontFamily: graphBodyFont,
           }}
         >
-          <div style={{ fontSize: 12, lineHeight: 1.55, color: "#dbe4f0" }}>{data.shortDescription}</div>
+          <div style={{ fontSize: 12, lineHeight: 1.6, color: cinematicTypography.ink }}>{data.shortDescription}</div>
         </div>
       ) : null}
 
@@ -922,20 +1148,43 @@ function WorldNode({ data }: NodeProps<Node<GraphNodeData>>) {
           borderRadius: shape.radius,
           border,
           boxShadow: shadow,
-          background:
-            shape.orientation === "timeline"
-              ? "linear-gradient(180deg, rgba(22,28,39,0.96) 0%, rgba(12,18,28,0.96) 100%)"
-              : "linear-gradient(180deg, rgba(16,21,31,0.98) 0%, rgba(10,14,24,0.98) 100%)",
+          background: tone.surface,
           overflow: "hidden",
-          padding: shape.orientation === "compact" ? "12px 14px" : "14px 16px",
+          padding: shape.orientation === "compact" ? "11px 13px" : "14px 15px",
+          fontFamily: graphBodyFont,
+          backdropFilter: "blur(18px)",
+          WebkitBackdropFilter: "blur(18px)",
         }}
       >
         <div
           style={{
             position: "absolute",
             inset: 0,
-            background: `linear-gradient(135deg, ${accent}20 0%, transparent 55%)`,
+            background: tone.overlay,
             pointerEvents: "none",
+          }}
+        />
+        {isSelected ? (
+          <div
+            style={{
+              position: "absolute",
+              inset: "-18%",
+              background: `radial-gradient(circle, ${accent}1a 0%, transparent 60%)`,
+              filter: "blur(20px)",
+              pointerEvents: "none",
+            }}
+          />
+        ) : null}
+
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 2,
+            background: `linear-gradient(90deg, ${accent} 0%, ${accent}55 100%)`,
+            opacity: isDimmed ? 0.42 : 1,
           }}
         />
 
@@ -949,24 +1198,77 @@ function WorldNode({ data }: NodeProps<Node<GraphNodeData>>) {
         >
           <div
             style={{
-              width: shape.orientation === "compact" ? 30 : 36,
-              height: shape.orientation === "compact" ? 30 : 36,
-              borderRadius: shape.orientation === "timeline" ? 12 : 14,
-              background: `${accent}22`,
-              border: `1px solid ${accent}55`,
-              color: "#fff",
+               width: shape.orientation === "compact" ? 28 : 34,
+               height: shape.orientation === "compact" ? 28 : 34,
+               borderRadius: shape.orientation === "timeline" ? 12 : 14,
+               background: `${accent}14`,
+               border: `1px solid ${accent}26`,
+               color: "#fff",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               fontWeight: 800,
               fontSize: 14,
               flexShrink: 0,
-            }}
-          >
+               boxShadow: `inset 0 1px 0 rgba(255,255,255,0.08), 0 10px 18px ${accent}10`,
+               backdropFilter: "blur(14px)",
+               WebkitBackdropFilter: "blur(14px)",
+             }}
+           >
             {data.iconGlyph ?? "•"}
           </div>
 
           <div style={{ minWidth: 0, flex: 1 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+                marginBottom: 8,
+                flexWrap: "wrap",
+              }}
+            >
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                  color: cinematicTypography.inkSoft,
+                  fontSize: 10,
+                  fontWeight: 800,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  fontFamily: graphBodyFont,
+                }}
+              >
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: 999,
+                    background: accent,
+                    boxShadow: `0 0 12px ${accent}55`,
+                    flexShrink: 0,
+                  }}
+                />
+                {tone.familyLabel}
+              </div>
+              {data.metaLabel && compact ? (
+                <div
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                     color: cinematicTypography.inkMuted,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.06em",
+                  }}
+                >
+                  {data.metaLabel}
+                </div>
+              ) : null}
+            </div>
+
             <div
               style={{
                 display: "flex",
@@ -978,11 +1280,13 @@ function WorldNode({ data }: NodeProps<Node<GraphNodeData>>) {
             >
               <div
                 style={{
-                  fontSize: shape.orientation === "wide" ? 16 : 15,
-                  fontWeight: 800,
-                  color: "#f8fafc",
+                   fontSize: shape.orientation === "wide" ? 17 : 15,
+                   fontWeight: 700,
+                   color: cinematicTypography.inkStrong,
                   lineHeight: 1.25,
                   wordBreak: "break-word",
+                  fontFamily: graphDisplayFont,
+                  letterSpacing: "0.01em",
                 }}
               >
                 {data.name}
@@ -990,15 +1294,12 @@ function WorldNode({ data }: NodeProps<Node<GraphNodeData>>) {
               {isSelected ? (
                 <span
                   style={{
-                    padding: "3px 8px",
-                    borderRadius: 999,
-                    background: `${accent}22`,
-                    border: `1px solid ${accent}55`,
                     fontSize: 10,
                     fontWeight: 800,
                     textTransform: "uppercase",
                     letterSpacing: "0.06em",
-                    color: "#fff",
+                    color: accent,
+                    fontFamily: graphBodyFont,
                   }}
                 >
                   attivo
@@ -1010,28 +1311,34 @@ function WorldNode({ data }: NodeProps<Node<GraphNodeData>>) {
               style={{
                 display: "inline-flex",
                 alignItems: "center",
-                gap: 6,
-                padding: "4px 8px",
-                borderRadius: shape.orientation === "timeline" ? 999 : 12,
-                background: `${accent}16`,
-                border: `1px solid ${accent}2e`,
-                color: "#d9e5f2",
+                gap: 8,
+                color: cinematicTypography.ink,
                 fontSize: 11,
                 fontWeight: 700,
                 textTransform: "uppercase",
                 letterSpacing: "0.05em",
+                fontFamily: graphBodyFont,
               }}
             >
+              <span
+                style={{
+                  width: 4,
+                  height: 4,
+                  borderRadius: 999,
+                  background: "rgba(255,255,255,0.72)",
+                  opacity: 0.7,
+                }}
+              />
               {data.typeLabel}
             </div>
 
-            {data.metaLabel ? (
+            {data.metaLabel && !compact ? (
               <div
                 style={{
                   marginTop: 10,
                   fontSize: 12,
                   lineHeight: 1.45,
-                  color: "#b9c6d5",
+                   color: cinematicTypography.inkMuted,
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -1058,11 +1365,12 @@ function ClusterBackgroundNode({
         width: typeof width === "number" ? `${width}px` : "420px",
         height: typeof height === "number" ? `${height}px` : "260px",
         borderRadius: "28px",
-        border: `1px dashed ${data.accentColor}55`,
-        background: `linear-gradient(180deg, ${data.accentColor}14 0%, rgba(15,23,42,0.12) 100%)`,
-        boxShadow: `inset 0 0 0 1px ${data.accentColor}12, 0 20px 48px rgba(0,0,0,0.14)`,
+        border: `1px dashed ${data.accentColor}24`,
+        background: `radial-gradient(circle at top left, ${data.accentColor}14 0%, transparent 42%), linear-gradient(180deg, rgba(255,255,255,0.02) 0%, rgba(15,23,42,0.04) 100%)`,
+        boxShadow: `inset 0 0 0 1px ${data.accentColor}08, 0 18px 42px rgba(0,0,0,0.08)`,
         position: "relative",
-        backdropFilter: "blur(2px)",
+        backdropFilter: "blur(8px)",
+        WebkitBackdropFilter: "blur(8px)",
         pointerEvents: "none",
       }}
     >
@@ -1074,19 +1382,21 @@ function ClusterBackgroundNode({
           display: "inline-flex",
           flexDirection: "column",
           gap: "4px",
-          padding: "10px 12px",
-          borderRadius: "16px",
-          background: "rgba(2, 6, 23, 0.74)",
-          border: `1px solid ${data.accentColor}44`,
-          color: "#f8fafc",
+          color: cinematicTypography.inkStrong,
           maxWidth: "70%",
+          fontFamily: graphBodyFont,
+          textShadow: "0 6px 20px rgba(0,0,0,0.22)",
         }}
       >
-        <div style={{ fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.08em", color: "#cbd5e1" }}>
+        <div style={{ fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.08em", color: cinematicTypography.gold }}>
           cluster
         </div>
-        <div style={{ fontSize: "15px", fontWeight: 800, lineHeight: 1.2 }}>{data.label}</div>
-        {data.subtitle ? <div style={{ fontSize: "12px", color: "#cbd5e1" }}>{data.subtitle}</div> : null}
+        <div style={{ fontSize: "17px", fontWeight: 700, lineHeight: 1.2, fontFamily: graphDisplayFont }}>{data.label}</div>
+        {data.subtitle ? (
+          <div style={{ fontSize: "12px", color: cinematicTypography.inkMuted, lineHeight: 1.5 }}>
+            {data.subtitle}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -1117,11 +1427,45 @@ function RelationEdge(props: EdgeProps<Edge<GraphEdgeData>>) {
   });
 
   const relationLabel = typeof data?.relationLabel === "string" ? data.relationLabel.trim() : "";
+  const showLabel = Boolean(data?.showLabel);
+  const family = data?.family ?? "neutral";
+  const familyTheme = getRelationFamilyTheme(family);
+  const emphasis = data?.emphasis ?? "ambient";
+  const density = data?.density ?? "normal";
+  const mainStrokeWidth = emphasis === "focus" ? 2.5 : emphasis === "context" ? 1.9 : density === "overloaded" ? 0.95 : 1.25;
+  const glowWidth = emphasis === "focus" ? mainStrokeWidth + 4 : emphasis === "context" ? mainStrokeWidth + 2.6 : mainStrokeWidth + 1.5;
+  const glowStroke =
+    emphasis === "focus"
+      ? `${familyTheme.accent}38`
+      : emphasis === "context"
+      ? `${familyTheme.accent}20`
+      : density === "overloaded"
+      ? "rgba(148,163,184,0.06)"
+      : `${familyTheme.accent}12`;
+  const labelFontSize = density === "overloaded" ? 11 : 12;
 
   return (
     <>
-      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
-      {relationLabel ? (
+      <BaseEdge
+        id={`${id}-glow`}
+        path={edgePath}
+        style={{
+          stroke: glowStroke,
+          strokeWidth: glowWidth,
+          strokeDasharray: style?.strokeDasharray,
+          strokeLinecap: "round",
+        }}
+      />
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        markerEnd={markerEnd}
+        style={{
+          ...style,
+          strokeLinecap: "round",
+        }}
+      />
+      {relationLabel && showLabel ? (
         <EdgeLabelRenderer>
           <div
             style={{
@@ -1131,13 +1475,16 @@ function RelationEdge(props: EdgeProps<Edge<GraphEdgeData>>) {
               zIndex: 50,
               padding: "6px 10px",
               borderRadius: 999,
-              background: "rgba(2,6,23,0.96)",
-              border: "1px solid #475569",
-              color: "#fff",
-              fontSize: 12,
+              background: "rgba(8,12,20,0.42)",
+              border: `1px solid ${familyTheme.accent}40`,
+              color: "#fff8ea",
+              fontSize: labelFontSize,
               fontWeight: 800,
               whiteSpace: "nowrap",
-              boxShadow: "0 6px 18px rgba(0,0,0,0.28)",
+              boxShadow: `0 10px 24px rgba(0,0,0,0.24), 0 0 18px ${familyTheme.accent}12`,
+              fontFamily: graphBodyFont,
+              backdropFilter: "blur(16px)",
+              WebkitBackdropFilter: "blur(16px)",
             }}
           >
             {relationLabel}
@@ -1150,16 +1497,32 @@ function RelationEdge(props: EdgeProps<Edge<GraphEdgeData>>) {
 
 const nodeTypes = { worldNode: WorldNode, clusterBackground: ClusterBackgroundNode };
 const edgeTypes = { relationEdge: RelationEdge };
+const graphDisplayFont =
+  '"Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif';
+const graphBodyFont =
+  '"Source Sans 3", "Segoe UI", "Trebuchet MS", system-ui, sans-serif';
 
-const controlsSectionStyle: React.CSSProperties = { display: "grid", gap: 10 };
+const controlsSectionStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 18,
+  fontFamily: graphBodyFont,
+};
+const graphSectionCardStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 12,
+  paddingTop: "14px",
+  borderTop: "1px solid rgba(255,255,255,0.08)",
+};
 const graphCanvasStyle: React.CSSProperties = {
   height: "680px",
   background:
-    "radial-gradient(circle at top, rgba(145, 120, 61, 0.12), transparent 28%), linear-gradient(180deg, #0b1118 0%, #11161d 100%)",
-  borderRadius: "18px",
-  border: "1px solid #334155",
+    "radial-gradient(circle at 28% 18%, rgba(120,150,255,0.12), transparent 22%), radial-gradient(circle at 76% 16%, rgba(255,150,92,0.1), transparent 22%), linear-gradient(180deg, rgba(11,14,20,0.88) 0%, rgba(9,13,20,0.96) 100%)",
+  borderRadius: "24px",
+  border: "1px solid rgba(255,255,255,0.08)",
   overflow: "hidden",
-  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
+  boxShadow: "0 20px 46px rgba(0,0,0,0.2), 0 0 28px rgba(100,150,255,0.08)",
+  backdropFilter: "blur(20px)",
+  WebkitBackdropFilter: "blur(20px)",
 };
 
 function getEntityTypeLayoutPriority(entityType: EntityType): number {
@@ -1465,6 +1828,9 @@ export default function GraphPanel({
   graphTypeFilters,
   graphViewType,
   graphViewTag,
+  graphSearch,
+  graphRelationFilter,
+  graphNeighborhoodDepth,
   allTags,
   selectedEntityId,
   graphData,
@@ -1473,15 +1839,23 @@ export default function GraphPanel({
   onToggleGraphTypeFilter,
   onGraphViewTypeChange,
   onGraphViewTagChange,
+  onGraphSearchChange,
+  onGraphRelationFilterChange,
+  onGraphNeighborhoodDepthChange,
   onNodeClick,
   getEntityById,
   compactControlsOnly = false,
   graphOnly = false,
 }: GraphPanelProps) {
+  const [showAdvancedControls, setShowAdvancedControls] = useState(false);
   const [graphLayoutMode, setGraphLayoutModeState] = useState<GraphLayoutMode>(sharedGraphState.layoutMode);
   const [graphClusterMode, setGraphClusterModeState] = useState<GraphClusterMode>(sharedGraphState.clusterMode);
   const [manualNodePositions, setManualNodePositionsState] = useState<ManualNodePositionMap>(sharedGraphState.manualNodePositions);
-  const [graphSearch, setGraphSearch] = useState("");
+  const [graphDetailMode, setGraphDetailModeState] = useState<GraphDetailMode>(sharedGraphState.detailMode);
+  const [graphNodeLimit, setGraphNodeLimitState] = useState<GraphNodeLimit>(sharedGraphState.nodeLimit);
+  const [collapsedClusters, setCollapsedClustersState] = useState<Partial<Record<GraphClusterMode, string[]>>>(
+    sharedGraphState.collapsedClusters
+  );
   const [renderNodes, setRenderNodes] = useState<Node[]>([]);
   const reactFlowRef = useRef<ReactFlowInstance<Node, Edge> | null>(null);
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance<Node, Edge> | null>(null);
@@ -1492,6 +1866,9 @@ export default function GraphPanel({
       setGraphLayoutModeState(sharedGraphState.layoutMode);
       setGraphClusterModeState(sharedGraphState.clusterMode);
       setManualNodePositionsState(sharedGraphState.manualNodePositions);
+      setGraphDetailModeState(sharedGraphState.detailMode);
+      setGraphNodeLimitState(sharedGraphState.nodeLimit);
+      setCollapsedClustersState(sharedGraphState.collapsedClusters);
     });
   }, []);
 
@@ -1508,10 +1885,113 @@ export default function GraphPanel({
     updateSharedGraphState({ manualNodePositions: next });
   }, []);
 
+  const setGraphDetailMode = useCallback((value: GraphDetailMode) => {
+    updateSharedGraphState({ detailMode: value });
+  }, []);
+
+  const setGraphNodeLimit = useCallback((value: GraphNodeLimit) => {
+    updateSharedGraphState({ nodeLimit: value });
+  }, []);
+
+  const applyGraphPreset = useCallback(
+    (presetId: GraphPresetId) => {
+      onGraphSearchChange("");
+      onGraphRelationFilterChange("all");
+
+      if (presetId === "focus") {
+        onGraphViewModeChange("focused");
+        onGraphFilterChange("all");
+        onGraphNeighborhoodDepthChange(2);
+        setGraphClusterMode("none");
+        setGraphDetailMode("full");
+        setGraphNodeLimit("all");
+        setGraphLayoutMode("auto");
+        return;
+      }
+
+      if (presetId === "political") {
+        onGraphViewModeChange("global");
+        onGraphFilterChange("all");
+        setGraphClusterMode("faction");
+        setGraphDetailMode("compact");
+        setGraphNodeLimit(240);
+        setGraphLayoutMode("map");
+        return;
+      }
+
+      if (presetId === "genealogy") {
+        onGraphViewModeChange("global");
+        onGraphFilterChange("all");
+        setGraphClusterMode("genealogy");
+        setGraphDetailMode("full");
+        setGraphNodeLimit(120);
+        setGraphLayoutMode("auto");
+        return;
+      }
+
+      if (presetId === "events") {
+        onGraphViewModeChange("global");
+        onGraphFilterChange("all");
+        setGraphClusterMode("storyline");
+        setGraphDetailMode("compact");
+        setGraphNodeLimit(240);
+        setGraphLayoutMode("auto");
+        return;
+      }
+
+      onGraphViewModeChange("global");
+      onGraphFilterChange("all");
+      setGraphClusterMode("faction");
+      setGraphDetailMode("compact");
+      setGraphNodeLimit(240);
+      setGraphLayoutMode("auto");
+    },
+    [
+      onGraphFilterChange,
+      onGraphNeighborhoodDepthChange,
+      onGraphRelationFilterChange,
+      onGraphSearchChange,
+      onGraphViewModeChange,
+      setGraphClusterMode,
+      setGraphDetailMode,
+      setGraphLayoutMode,
+      setGraphNodeLimit,
+    ]
+  );
+
+  const toggleCollapsedCluster = useCallback((clusterLabel: string) => {
+    const current = sharedGraphState.collapsedClusters[graphClusterMode] ?? [];
+    const next = current.includes(clusterLabel)
+      ? current.filter((item) => item !== clusterLabel)
+      : [...current, clusterLabel];
+    updateSharedGraphState({
+      collapsedClusters: {
+        ...sharedGraphState.collapsedClusters,
+        [graphClusterMode]: next,
+      },
+    });
+  }, [graphClusterMode]);
+
   const showFocusedDirectionControls = graphViewMode === "focused";
   const showTypeToggles = graphViewMode === "focused" || graphViewMode === "global";
   const showTypeSelector = graphViewMode === "type-only";
   const showTagSelector = graphViewMode === "tag-based";
+  const availableRelationLabels = useMemo(() => {
+    return Array.from(
+      new Set(
+        graphData.edges
+          .map((edge) => extractEdgeRelationLabel(edge).trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b, "it", { sensitivity: "base" }));
+  }, [graphData.edges]);
+  const availableClusterLabels = useMemo(() => {
+    const context = buildClusterComputationContext(graphData.nodes, graphData.edges, getEntityById);
+    const keys = buildClusterKeyMap(graphClusterMode, context);
+    return Array.from(new Set(Object.values(keys))).sort((a, b) =>
+      a.localeCompare(b, "it", { sensitivity: "base" })
+    );
+  }, [graphClusterMode, graphData.edges, graphData.nodes, getEntityById]);
 
   const visibleGraphData = useMemo(() => {
     const query = graphSearch.trim().toLowerCase();
@@ -1551,7 +2031,9 @@ export default function GraphPanel({
       } as Node<GraphNodeData>;
     });
 
-    const styledEdges = graphData.edges.map((edge) => {
+    const normalizedRelationFilter = normalizeRelationLabel(graphRelationFilter);
+    const styledEdges = graphData.edges
+      .map((edge) => {
       const relationLabel =
         typeof edge.label === "string" && edge.label.trim()
           ? edge.label.trim()
@@ -1559,65 +2041,212 @@ export default function GraphPanel({
           ? String((edge.data as { label?: unknown }).label)
           : "";
 
+      const family = classifyRelationFamily(relationLabel);
+      const familyTheme = getRelationFamilyTheme(family);
+
       return {
         ...edge,
         type: "relationEdge",
         label: undefined,
         animated: false,
         style: {
-          stroke: "#66758a",
+          stroke: `${familyTheme.accent}aa`,
           strokeWidth: 1.5,
+          strokeDasharray: familyTheme.dash,
         },
         data: {
           ...(edge.data ?? {}),
           relationLabel,
+          family,
+        },
+      } as Edge<GraphEdgeData>;
+      })
+      .filter((edge) => {
+        if (!normalizedRelationFilter || normalizedRelationFilter === "all") return true;
+        return normalizeRelationLabel(extractEdgeRelationLabel(edge)) === normalizedRelationFilter;
+      });
+
+    let workingNodes = baseNodes;
+    let workingEdges = styledEdges;
+
+    if (!query) {
+      if (normalizedRelationFilter && normalizedRelationFilter !== "all") {
+        const relatedIds = new Set<string>();
+        styledEdges.forEach((edge) => {
+          relatedIds.add(String(edge.source));
+          relatedIds.add(String(edge.target));
+        });
+        if (selectedEntityId) {
+          relatedIds.add(selectedEntityId);
+        }
+        workingNodes = baseNodes.filter((node) => relatedIds.has(String(node.id)));
+      }
+    } else {
+      const matchedIds = new Set<string>();
+      baseNodes.forEach((node) => {
+        const entity = clusterContext.entitiesById.get(String(node.id));
+        const haystack = [
+          String(node.id),
+          entity?.name ?? "",
+          entity?.type ?? "",
+          entity?.shortDescription ?? "",
+          entity?.notes ?? "",
+          ...(entity?.tags ?? []),
+          ...Object.values(entity?.metadata ?? {}),
+        ]
+          .join(" ")
+          .toLowerCase();
+
+        if (haystack.includes(query)) matchedIds.add(String(node.id));
+      });
+
+      const relatedIds = new Set<string>(matchedIds);
+      styledEdges.forEach((edge) => {
+        const source = String(edge.source);
+        const target = String(edge.target);
+        if (matchedIds.has(source) || matchedIds.has(target)) {
+          relatedIds.add(source);
+          relatedIds.add(target);
+        }
+      });
+      if (selectedEntityId) relatedIds.add(selectedEntityId);
+
+      workingNodes = baseNodes.filter((node) => relatedIds.has(String(node.id)));
+      workingEdges = styledEdges.filter(
+        (edge) => relatedIds.has(String(edge.source)) && relatedIds.has(String(edge.target))
+      );
+    }
+
+    const collapsedLabels = new Set(collapsedClusters[graphClusterMode] ?? []);
+    if (graphClusterMode !== "none" && collapsedLabels.size > 0) {
+      const visibleIds = new Set(
+        workingNodes
+          .filter((node) => {
+            const label = clusterKeyById[String(node.id)] ?? "";
+            if (String(node.id) === selectedEntityId) return true;
+            return !collapsedLabels.has(label);
+          })
+          .map((node) => String(node.id))
+      );
+      workingNodes = workingNodes.filter((node) => visibleIds.has(String(node.id)));
+      workingEdges = workingEdges.filter(
+        (edge) => visibleIds.has(String(edge.source)) && visibleIds.has(String(edge.target))
+      );
+    }
+
+    if (graphNodeLimit !== "all" && workingNodes.length > graphNodeLimit) {
+      const directIds = new Set<string>();
+      if (selectedEntityId) {
+        directIds.add(selectedEntityId);
+        workingEdges.forEach((edge) => {
+          if (String(edge.source) === selectedEntityId) directIds.add(String(edge.target));
+          if (String(edge.target) === selectedEntityId) directIds.add(String(edge.source));
+        });
+      }
+
+      const prioritized = [
+        ...workingNodes.filter((node) => directIds.has(String(node.id))),
+        ...workingNodes
+          .filter((node) => !directIds.has(String(node.id)))
+          .sort((a, b) => String(a.id).localeCompare(String(b.id), "it", { sensitivity: "base" })),
+      ].slice(0, graphNodeLimit);
+
+      const visibleIds = new Set(prioritized.map((node) => String(node.id)));
+      workingNodes = prioritized;
+      workingEdges = workingEdges.filter(
+        (edge) => visibleIds.has(String(edge.source)) && visibleIds.has(String(edge.target))
+      );
+    }
+
+    const highlightLabels =
+      graphViewMode === "focused" ||
+      Boolean(query) ||
+      (normalizedRelationFilter !== "" && normalizedRelationFilter !== "all");
+    const selectedNeighborIds = new Set<string>();
+
+    if (selectedEntityId !== "") {
+      workingEdges.forEach((edge) => {
+        const sourceId = String(edge.source);
+        const targetId = String(edge.target);
+        if (sourceId === selectedEntityId) selectedNeighborIds.add(targetId);
+        if (targetId === selectedEntityId) selectedNeighborIds.add(sourceId);
+      });
+    }
+
+    const graphDensity: GraphEdgeData["density"] =
+      workingNodes.length > 180 ? "overloaded" : workingNodes.length > 96 ? "dense" : "normal";
+
+    workingEdges = workingEdges.map((edge) => {
+      const sourceId = String(edge.source);
+      const targetId = String(edge.target);
+      const isSelectedEdge =
+        selectedEntityId !== "" &&
+        (sourceId === selectedEntityId || targetId === selectedEntityId);
+      const isContextEdge =
+        selectedEntityId !== "" &&
+        !isSelectedEdge &&
+        (selectedNeighborIds.has(sourceId) || selectedNeighborIds.has(targetId));
+      const mutedBase = !highlightLabels;
+      const familyTheme = getRelationFamilyTheme(edge.data?.family ?? "neutral");
+      const emphasis: GraphEdgeData["emphasis"] = isSelectedEdge
+        ? "focus"
+        : isContextEdge
+        ? "context"
+        : "ambient";
+      const ambientStroke =
+        graphDensity === "overloaded"
+          ? "rgba(110, 125, 151, 0.18)"
+          : graphDensity === "dense"
+          ? `${familyTheme.accent}52`
+          : mutedBase
+          ? "rgba(100, 116, 139, 0.28)"
+          : `${familyTheme.accent}74`;
+      const ambientWidth = graphDensity === "overloaded" ? 0.95 : mutedBase ? 1 : 1.35;
+
+      return {
+        ...edge,
+        style: {
+          stroke: isSelectedEdge
+            ? `${familyTheme.accent}ee`
+            : isContextEdge
+            ? `${familyTheme.accent}a6`
+            : ambientStroke,
+          strokeWidth: isSelectedEdge ? 2.4 : isContextEdge ? 1.8 : ambientWidth,
+          strokeDasharray: familyTheme.dash,
+        },
+        data: {
+          ...(edge.data ?? {}),
+          relationLabel: extractEdgeRelationLabel(edge),
+          family: edge.data?.family ?? classifyRelationFamily(extractEdgeRelationLabel(edge)),
+          emphasis,
+          density: graphDensity,
+          showLabel:
+            highlightLabels &&
+            workingEdges.length <= (graphDensity === "overloaded" ? 42 : graphDensity === "dense" ? 72 : 90) &&
+            (isSelectedEdge || Boolean(query) || (normalizedRelationFilter !== "" && normalizedRelationFilter !== "all")),
         },
       } as Edge<GraphEdgeData>;
     });
 
-    if (!query) {
-      return { nodes: baseNodes, edges: styledEdges, entitiesById: clusterContext.entitiesById, clusterKeyById, genealogyTree };
-    }
-
-    const matchedIds = new Set<string>();
-    baseNodes.forEach((node) => {
-      const entity = clusterContext.entitiesById.get(String(node.id));
-      const haystack = [
-        String(node.id),
-        entity?.name ?? "",
-        entity?.type ?? "",
-        entity?.shortDescription ?? "",
-        entity?.notes ?? "",
-        ...(entity?.tags ?? []),
-        ...Object.values(entity?.metadata ?? {}),
-      ]
-        .join(" ")
-        .toLowerCase();
-
-      if (haystack.includes(query)) matchedIds.add(String(node.id));
-    });
-
-    const relatedIds = new Set<string>(matchedIds);
-    styledEdges.forEach((edge) => {
-      const source = String(edge.source);
-      const target = String(edge.target);
-      if (matchedIds.has(source) || matchedIds.has(target)) {
-        relatedIds.add(source);
-        relatedIds.add(target);
-      }
-    });
-    if (selectedEntityId) relatedIds.add(selectedEntityId);
-
     return {
-      nodes: baseNodes.filter((node) => relatedIds.has(String(node.id))),
-      edges: styledEdges.filter(
-        (edge) => relatedIds.has(String(edge.source)) && relatedIds.has(String(edge.target))
-      ),
+      nodes: workingNodes,
+      edges: workingEdges,
       entitiesById: clusterContext.entitiesById,
       clusterKeyById,
       genealogyTree,
     };
-  }, [graphSearch, graphData, getEntityById, entityTypes, selectedEntityId, graphClusterMode]);
+  }, [
+    graphSearch,
+    graphData,
+    getEntityById,
+    entityTypes,
+    selectedEntityId,
+    graphViewMode,
+    graphClusterMode,
+    graphRelationFilter,
+    collapsedClusters,
+    graphNodeLimit,
+  ]);
 
   const layoutedNodes = useMemo(() => {
     const ids = visibleGraphData.nodes.map((node) => String(node.id)).join("|");
@@ -1650,6 +2279,8 @@ export default function GraphPanel({
       const isSelected = String(node.id) === selectedEntityId;
       const isConnected = selectionNeighborhood.has(String(node.id)) && !isSelected;
       const isDimmed = Boolean(selectedEntityId) && !isSelected && !isConnected;
+      const density: GraphNodeData["density"] =
+        visibleGraphData.nodes.length > 180 ? "overloaded" : visibleGraphData.nodes.length > 96 ? "dense" : "normal";
 
       return {
         ...node,
@@ -1664,6 +2295,8 @@ export default function GraphPanel({
           isConnectedToSelection: isConnected,
           isDimmed,
           level: isSelected ? 0 : isConnected ? 1 : 2,
+          compact: graphDetailMode === "compact" || visibleGraphData.nodes.length > 160,
+          density,
         },
       } as Node<GraphNodeData>;
     });
@@ -1683,21 +2316,32 @@ export default function GraphPanel({
       signature,
       nodes: [...backgroundNodes, ...entityNodes],
     };
-  }, [visibleGraphData, graphLayoutMode, graphClusterMode, manualNodePositions, selectedEntityId]);
+  }, [visibleGraphData, graphLayoutMode, graphClusterMode, manualNodePositions, selectedEntityId, graphDetailMode]);
 
   useEffect(() => {
     const isLayoutSwitch = lastAppliedLayoutRef.current !== layoutedNodes.signature;
     lastAppliedLayoutRef.current = layoutedNodes.signature;
-    setRenderNodes(layoutedNodes.nodes as Node[]);
+    const syncFrame = window.requestAnimationFrame(() => {
+      setRenderNodes(layoutedNodes.nodes as Node[]);
+    });
+    let fitFrame: number | null = null;
 
-    if (!reactFlowInstance) return;
-    if (!isLayoutSwitch) return;
-
-    if (graphLayoutMode === "auto" || graphLayoutMode === "map") {
-      window.requestAnimationFrame(() => {
+    if (
+      reactFlowInstance &&
+      isLayoutSwitch &&
+      (graphLayoutMode === "auto" || graphLayoutMode === "map")
+    ) {
+      fitFrame = window.requestAnimationFrame(() => {
         reactFlowInstance.fitView({ padding: graphLayoutMode === "map" ? 0.34 : 0.28, duration: 280, includeHiddenNodes: true });
       });
     }
+
+    return () => {
+      window.cancelAnimationFrame(syncFrame);
+      if (fitFrame !== null) {
+        window.cancelAnimationFrame(fitFrame);
+      }
+    };
   }, [layoutedNodes, graphLayoutMode, reactFlowInstance]);
 
   function handleNodesChange(changes: NodeChange[]) {
@@ -1738,13 +2382,23 @@ export default function GraphPanel({
 
   const containerStyle: React.CSSProperties = graphOnly
     ? { height: "100%", minHeight: 0, display: "grid" }
-    : { ...panelStyle, border: "1px solid #263244", boxShadow: "0 18px 46px rgba(0,0,0,0.22)" };
+    : {
+        display: "grid",
+        gap: 18,
+      };
 
   const graphHeightStyle: React.CSSProperties = compactControlsOnly
     ? {}
     : graphOnly
     ? { ...graphCanvasStyle, height: "100%", minHeight: "560px", borderRadius: 0, border: "none", boxShadow: "none" }
     : graphCanvasStyle;
+  const backgroundGap = visibleGraphData.nodes.length > 180 ? 28 : visibleGraphData.nodes.length > 96 ? 24 : 20;
+  const backgroundColor =
+    visibleGraphData.nodes.length > 180
+      ? "rgba(202, 165, 103, 0.08)"
+      : visibleGraphData.nodes.length > 96
+      ? "rgba(202, 165, 103, 0.1)"
+      : "rgba(202, 165, 103, 0.14)";
 
   return (
     <div style={containerStyle}>
@@ -1756,25 +2410,47 @@ export default function GraphPanel({
               justifyContent: "space-between",
               alignItems: "flex-start",
               gap: 12,
-              marginBottom: 14,
+              marginBottom: 2,
               flexWrap: "wrap",
+              paddingBottom: 14,
+              borderBottom: "1px solid rgba(255,255,255,0.08)",
             }}
           >
             <div>
-              <h2 style={{ marginTop: 0, marginBottom: 6 }}>Grafo relazioni</h2>
-              <div style={{ fontSize: 13, color: "#9ca3af" }}>
-                Vista multipla con layout automatico, libero o mappa semantica.
+              <div
+                style={{
+                  fontSize: 11,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.14em",
+                  color: cinematicTypography.gold,
+                  fontWeight: 800,
+                  marginBottom: 6,
+                }}
+              >
+                Atlas controls
+              </div>
+              <h2
+                style={{
+                  marginTop: 0,
+                  marginBottom: 6,
+                  fontFamily: graphDisplayFont,
+                  fontSize: 28,
+                  fontWeight: 700,
+                  color: cinematicTypography.inkStrong,
+                }}
+              >
+                Grafo relazioni
+              </h2>
+              <div style={{ fontSize: 13, color: cinematicTypography.ink, lineHeight: 1.65 }}>
+                Vista multipla con filtri, cluster e decluttering per mondi più leggibili.
               </div>
             </div>
 
             <div
               style={{
                 fontSize: 12,
-                color: "#d5dfeb",
-                padding: "8px 10px",
-                borderRadius: 999,
-                background: "#0b1220",
-                border: "1px solid #334155",
+                color: cinematicTypography.inkStrong,
+                padding: "6px 0",
               }}
             >
               Nodi: {visibleGraphData.nodes.length} · Relazioni: {visibleGraphData.edges.length}
@@ -1782,130 +2458,343 @@ export default function GraphPanel({
           </div>
 
           <div style={controlsSectionStyle}>
-            <div style={{ fontSize: 13, color: "#9ca3af" }}>Modalità vista</div>
-
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {GRAPH_VIEW_MODE_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => onGraphViewModeChange(option.value)}
-                  style={modeButtonStyle(graphViewMode === option.value)}
+            <div style={graphSectionCardStyle}>
+              <div style={{ display: "grid", gap: 6 }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    letterSpacing: 0.8,
+                    textTransform: "uppercase",
+                    color: cinematicTypography.gold,
+                  }}
                 >
-                  {option.label}
+                  Preset rapidi
+                </div>
+                <div style={{ fontSize: 13, color: cinematicTypography.inkMuted, lineHeight: 1.55 }}>
+                  Scorciatoie per leggere subito il mondo senza dover regolare tutti i controlli.
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button type="button" onClick={() => applyGraphPreset("focus")} style={modeButtonStyle(false)}>
+                  Focus pulito
                 </button>
-              ))}
+                <button type="button" onClick={() => applyGraphPreset("political")} style={modeButtonStyle(false)}>
+                  Politica
+                </button>
+                <button type="button" onClick={() => applyGraphPreset("genealogy")} style={modeButtonStyle(false)}>
+                  Genealogia
+                </button>
+                <button type="button" onClick={() => applyGraphPreset("events")} style={modeButtonStyle(false)}>
+                  Eventi
+                </button>
+                <button type="button" onClick={() => applyGraphPreset("factions")} style={modeButtonStyle(false)}>
+                  Fazioni
+                </button>
+              </div>
             </div>
 
-            {showFocusedDirectionControls ? (
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {GRAPH_FOCUSED_FILTER_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    onClick={() => onGraphFilterChange(option.value)}
-                    style={modeButtonStyle(graphFilter === option.value)}
+            <div style={graphSectionCardStyle}>
+              <div style={{ display: "grid", gap: 10 }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    letterSpacing: 0.8,
+                    textTransform: "uppercase",
+                    color: cinematicTypography.gold,
+                  }}
+                >
+                  Controlli principali
+                </div>
+
+                <input
+                  type="text"
+                  value={graphSearch}
+                  onChange={(e) => onGraphSearchChange(e.target.value)}
+                  placeholder="Cerca nodi, luoghi, personaggi o tag..."
+                  style={{ ...inputStyle, width: "100%" }}
+                />
+
+                <select
+                  value={graphRelationFilter}
+                  onChange={(e) => onGraphRelationFilterChange(e.target.value)}
+                  style={selectStyle}
+                >
+                  <option value="all">Tutte le relazioni</option>
+                  {availableRelationLabels.map((relationLabel) => (
+                    <option key={relationLabel} value={relationLabel}>
+                      {relationLabel}
+                    </option>
+                  ))}
+                </select>
+
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {GRAPH_VIEW_MODE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => onGraphViewModeChange(option.value)}
+                      style={modeButtonStyle(graphViewMode === option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+
+                {showFocusedDirectionControls ? (
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {GRAPH_FOCUSED_FILTER_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => onGraphFilterChange(option.value)}
+                        style={modeButtonStyle(graphFilter === option.value)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+
+                {showTypeSelector ? (
+                  <select
+                    value={graphViewType}
+                    onChange={(e) => onGraphViewTypeChange(e.target.value as "all" | EntityType)}
+                    style={selectStyle}
                   >
-                    {option.label}
-                  </button>
-                ))}
+                    <option value="all">Tutti i tipi</option>
+                    {entityTypes.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+
+                {showTagSelector ? (
+                  <select value={graphViewTag} onChange={(e) => onGraphViewTagChange(e.target.value)} style={selectStyle}>
+                    <option value="">{UI_TEXT.graphTagPlaceholder}</option>
+                    {allTags.map((tag) => (
+                      <option key={tag} value={tag}>
+                        {tag}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+
+                {showTypeToggles ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ fontSize: 12, color: cinematicTypography.inkMuted }}>Filtra per tipo</div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {entityTypes.map((option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => onToggleGraphTypeFilter(option.id)}
+                          style={typeToggleStyle(Boolean(graphTypeFilters[option.id]), option.id)}
+                          title={getEntityTypeLabel(option.id, entityTypes)}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
-            ) : null}
+            </div>
 
-            {showTypeSelector ? (
-              <select
-                value={graphViewType}
-                onChange={(e) => onGraphViewTypeChange(e.target.value as "all" | EntityType)}
-                style={selectStyle}
-              >
-                <option value="all">Tutti i tipi</option>
-                {entityTypes.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            ) : null}
+            <div style={graphSectionCardStyle}>
+              <div style={{ display: "grid", gap: 10 }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    letterSpacing: 0.8,
+                    textTransform: "uppercase",
+                    color: cinematicTypography.gold,
+                  }}
+                >
+                  Semantica visiva
+                </div>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {([
+                    ["political", "Politica"],
+                    ["genealogy", "Genealogia"],
+                    ["geography", "Geografia"],
+                    ["event", "Eventi"],
+                    ["neutral", "Generiche"],
+                  ] as Array<[GraphRelationFamily, string]>).map(([family, label]) => {
+                    const theme = getRelationFamilyTheme(family);
+                    return (
+                      <div
+                        key={family}
+                        style={{
+                          display: "grid",
+                          gap: 7,
+                          paddingBottom: 10,
+                          borderBottom: "1px solid rgba(255,255,255,0.08)",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span
+                            style={{
+                              width: 28,
+                              height: 0,
+                              borderTop: `2px ${theme.dash ? "dashed" : "solid"} ${theme.accent}`,
+                              display: "inline-block",
+                            }}
+                          />
+                          <span style={{ fontSize: 12, fontWeight: 700, color: cinematicTypography.inkStrong }}>
+                            {label}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 12, color: cinematicTypography.inkMuted, lineHeight: 1.5 }}>
+                          {family === "political"
+                            ? "Potere, alleanze, controllo e assetti di governo."
+                            : family === "genealogy"
+                            ? "Famiglia, discendenza, lignaggi e parentele."
+                            : family === "geography"
+                            ? "Appartenenza spaziale, collocazione e territorio."
+                            : family === "event"
+                            ? "Catene narrative, cronologia e partecipazione a eventi."
+                            : "Legami generici o non ancora classificati."}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
 
-            {showTagSelector ? (
-              <select value={graphViewTag} onChange={(e) => onGraphViewTagChange(e.target.value)} style={selectStyle}>
-                <option value="">{UI_TEXT.graphTagPlaceholder}</option>
-                {allTags.map((tag) => (
-                  <option key={tag} value={tag}>
-                    {tag}
-                  </option>
-                ))}
-              </select>
-            ) : null}
+                <div style={{ fontSize: 12, color: cinematicTypography.inkMuted, lineHeight: 1.55 }}>
+                  {GRAPH_VIEW_MODE_DESCRIPTIONS[graphViewMode]}
+                  <br />
+                  Layout: {graphLayoutMode === "auto" ? "automatico" : graphLayoutMode === "free" ? "libero" : "mappa"} · Cluster: {graphClusterMode}
+                </div>
+              </div>
+            </div>
 
-            {showTypeToggles ? (
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {entityTypes.map((option) => (
-                  <button
-                    key={option.id}
-                    type="button"
-                    onClick={() => onToggleGraphTypeFilter(option.id)}
-                    style={typeToggleStyle(Boolean(graphTypeFilters[option.id]), option.id)}
-                    title={getEntityTypeLabel(option.id, entityTypes)}
+            <div style={graphSectionCardStyle}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      letterSpacing: 0.8,
+                      textTransform: "uppercase",
+                      color: cinematicTypography.gold,
+                    }}
                   >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <button type="button" onClick={() => handleSwitchToLayout("auto")} style={modeButtonStyle(graphLayoutMode === "auto")}>
-                Layout automatico
-              </button>
-              <button type="button" onClick={handleSwitchToFree} style={modeButtonStyle(graphLayoutMode === "free")}>
-                Layout libero
-              </button>
-              <button type="button" onClick={() => handleSwitchToLayout("map")} style={modeButtonStyle(graphLayoutMode === "map")}>
-                Mappa
-              </button>
-              {graphLayoutMode === "free" ? (
-                <button type="button" onClick={handleResetFreeLayout} style={{ ...modeButtonStyle(false), background: "#3f3f46" }}>
-                  Reset posizioni visibili
+                    Opzioni avanzate
+                  </div>
+                  <div style={{ fontSize: 13, color: cinematicTypography.inkMuted, marginTop: 4 }}>
+                    Layout, cluster, limiti e decluttering fine.
+                  </div>
+                </div>
+                <button type="button" onClick={() => setShowAdvancedControls((current) => !current)} style={modeButtonStyle(showAdvancedControls)}>
+                  {showAdvancedControls ? "Nascondi avanzate" : "Mostra avanzate"}
                 </button>
+              </div>
+
+              {showAdvancedControls ? (
+                <div style={{ display: "grid", gap: 14 }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <button type="button" onClick={() => handleSwitchToLayout("auto")} style={modeButtonStyle(graphLayoutMode === "auto")}>
+                      Layout automatico
+                    </button>
+                    <button type="button" onClick={handleSwitchToFree} style={modeButtonStyle(graphLayoutMode === "free")}>
+                      Layout libero
+                    </button>
+                    <button type="button" onClick={() => handleSwitchToLayout("map")} style={modeButtonStyle(graphLayoutMode === "map")}>
+                      Mappa
+                    </button>
+                    {graphLayoutMode === "free" ? (
+                      <button
+                        type="button"
+                        onClick={handleResetFreeLayout}
+                        style={{ ...ghostButtonStyle, padding: "9px 12px", fontSize: 13 }}
+                      >
+                        Reset posizioni visibili
+                      </button>
+                    ) : null}
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <button type="button" onClick={() => setGraphClusterMode("none")} style={modeButtonStyle(graphClusterMode === "none")}>
+                      Nessun cluster
+                    </button>
+                    <button type="button" onClick={() => setGraphClusterMode("region")} style={modeButtonStyle(graphClusterMode === "region")}>
+                      Regione
+                    </button>
+                    <button type="button" onClick={() => setGraphClusterMode("faction")} style={modeButtonStyle(graphClusterMode === "faction")}>
+                      Fazione
+                    </button>
+                    <button type="button" onClick={() => setGraphClusterMode("genealogy")} style={modeButtonStyle(graphClusterMode === "genealogy")}>
+                      Genealogia
+                    </button>
+                    <button type="button" onClick={() => setGraphClusterMode("storyline")} style={modeButtonStyle(graphClusterMode === "storyline")}>
+                      Storyline
+                    </button>
+                  </div>
+
+                  {showFocusedDirectionControls ? (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                      <span style={{ fontSize: 12, color: cinematicTypography.inkMuted }}>Vicinato</span>
+                      {[1, 2, 3].map((depth) => (
+                        <button
+                          key={depth}
+                          type="button"
+                          onClick={() => onGraphNeighborhoodDepthChange(depth as GraphNeighborhoodDepth)}
+                          style={modeButtonStyle(graphNeighborhoodDepth === depth)}
+                        >
+                          {depth} salto{depth > 1 ? "i" : ""}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <span style={{ fontSize: 12, color: "#94a3b8" }}>Dettaglio</span>
+                    <button type="button" onClick={() => setGraphDetailMode("full")} style={modeButtonStyle(graphDetailMode === "full")}>
+                      Completo
+                    </button>
+                    <button type="button" onClick={() => setGraphDetailMode("compact")} style={modeButtonStyle(graphDetailMode === "compact")}>
+                      Compatto
+                    </button>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <span style={{ fontSize: 12, color: "#94a3b8" }}>Nodi</span>
+                    {[120, 240, "all"].map((limit) => (
+                      <button
+                        key={String(limit)}
+                        type="button"
+                        onClick={() => setGraphNodeLimit(limit as GraphNodeLimit)}
+                        style={modeButtonStyle(graphNodeLimit === limit)}
+                      >
+                        {limit === "all" ? "Tutti" : limit}
+                      </button>
+                    ))}
+                  </div>
+
+                  {graphClusterMode !== "none" && availableClusterLabels.length > 0 ? (
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <div style={{ fontSize: 12, color: "#94a3b8" }}>Collapse / expand cluster</div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {availableClusterLabels.slice(0, 18).map((clusterLabel) => {
+                          const collapsed = (collapsedClusters[graphClusterMode] ?? []).includes(clusterLabel);
+                          return (
+                            <button
+                              key={clusterLabel}
+                              type="button"
+                              onClick={() => toggleCollapsedCluster(clusterLabel)}
+                              style={modeButtonStyle(!collapsed)}
+                            >
+                              {collapsed ? "Mostra" : "Chiudi"} {clusterLabel}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
-            </div>
-
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <button type="button" onClick={() => setGraphClusterMode("none")} style={modeButtonStyle(graphClusterMode === "none")}>
-                Nessun cluster
-              </button>
-              <button type="button" onClick={() => setGraphClusterMode("region")} style={modeButtonStyle(graphClusterMode === "region")}>
-                Cluster regione
-              </button>
-              <button type="button" onClick={() => setGraphClusterMode("faction")} style={modeButtonStyle(graphClusterMode === "faction")}>
-                Cluster fazione
-              </button>
-              <button type="button" onClick={() => setGraphClusterMode("genealogy")} style={modeButtonStyle(graphClusterMode === "genealogy")}>
-                Cluster genealogia
-              </button>
-            </div>
-
-            <input
-              type="text"
-              value={graphSearch}
-              onChange={(e) => setGraphSearch(e.target.value)}
-              placeholder="Cerca nel grafo..."
-              style={{
-                width: "100%",
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "1px solid #374151",
-                backgroundColor: "#0b1220",
-                color: "#f3f4f6",
-                boxSizing: "border-box",
-              }}
-            />
-
-            <div style={{ fontSize: 12, color: "#9ca3af", lineHeight: 1.55 }}>
-              {GRAPH_VIEW_MODE_DESCRIPTIONS[graphViewMode]}
-              <br />
-              Layout: {graphLayoutMode === "auto" ? "automatico" : graphLayoutMode === "free" ? "libero" : "mappa"} · Cluster: {graphClusterMode}
             </div>
           </div>
         </>
@@ -1947,11 +2836,14 @@ export default function GraphPanel({
             <MiniMap
               pannable
               zoomable
-              maskColor="rgba(2, 6, 23, 0.72)"
+              maskColor="rgba(9, 7, 6, 0.76)"
               style={{
-                background: "rgba(15, 23, 42, 0.9)",
-                border: "1px solid #334155",
-                borderRadius: 12,
+                background: "rgba(9,14,22,0.36)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                borderRadius: 14,
+                boxShadow: "0 16px 34px rgba(0,0,0,0.22), 0 0 18px rgba(100,150,255,0.08)",
+                backdropFilter: "blur(18px)",
+                WebkitBackdropFilter: "blur(18px)",
               }}
               nodeColor={(node) => {
                 if (String(node.id).startsWith("cluster-bg:")) return "transparent";
@@ -1960,8 +2852,18 @@ export default function GraphPanel({
               }}
             />
 
-            <Controls style={{ borderRadius: 12, overflow: "hidden", boxShadow: "0 10px 24px rgba(0,0,0,0.25)" }} />
-            <Background gap={20} size={1} color="rgba(148,163,184,0.16)" />
+            <Controls
+              style={{
+                borderRadius: 14,
+                overflow: "hidden",
+                boxShadow: "0 14px 28px rgba(0,0,0,0.2), 0 0 18px rgba(100,150,255,0.06)",
+                background: "rgba(9,14,22,0.34)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                backdropFilter: "blur(18px)",
+                WebkitBackdropFilter: "blur(18px)",
+              }}
+            />
+            <Background gap={backgroundGap} size={1} color={backgroundColor} />
           </ReactFlow>
         </div>
       ) : null}

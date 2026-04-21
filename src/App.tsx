@@ -1,28 +1,32 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MarkerType, type Edge, type Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { getEntityTypeIcon, uiIcons } from "./utils/icons";
 import WorldDashboard from "./components/WorldDashboard";
 import GraphView from "./components/GraphView";
 import Sidebar from "./components/Sidebar";
 import EntityEditor from "./components/EntityEditor";
 import RelationsPanel from "./components/RelationsPanel";
 import NewEntityForm from "./components/NewEntityForm";
+import TimelineWorkbench from "./components/TimelineWorkbench";
+import ImportAssistantModal from "./components/ImportAssistantModal";
+import ReaderModeView from "./components/ReaderModeView";
+import AutomationStudio from "./components/AutomationStudio";
+import NarrativePackageModal from "./components/NarrativePackageModal";
 
 import type {
   FocusedGraphFilter,
+  GraphNeighborhoodDepth,
   GraphViewMode,
 } from "./components/GraphPanel";
 
 import {
   DEFAULT_RELATION_PRESET_INDEX,
-  TIMELINE_STATUS_COLORS,
   UI_TEXT,
 } from "./config";
 
 import {
+  cinematicTypography,
   ghostButtonStyle,
-  metaPillStyle,
   pageContainerStyle,
   pageStyle,
   panelStyle,
@@ -30,8 +34,6 @@ import {
   purpleButtonLargeStyle,
   secondaryButtonLargeStyle,
   successButtonLargeStyle,
-  timelineBadgeStyle,
-  timelineItemStyle,
 } from "./styles";
 
 import {
@@ -60,6 +62,8 @@ import {
   NODE_WIDTH,
 } from "./data";
 import { useLocalStorageState } from "./hooks/useLocalStorageState";
+import { useViewportWidth } from "./hooks/useViewportWidth";
+import { useWorkspaceState } from "./hooks/useWorkspaceState";
 import type {
   DndStats,
   Entity,
@@ -67,19 +71,37 @@ import type {
   EntityTypeDefinition,
   MetadataFieldDefinition,
   Relation,
+  RelationAutomationRule,
+  SemanticViewId,
+  WorkspacePreset,
   WorldData,
 } from "./types";
+import type {
+  ImportEntityReview,
+  RelationSuggestion,
+} from "./utils/worldData";
+import {
+  buildDefaultGraphTypeFilters,
+  buildNarrativePackageScope,
+  classifyImportEntities,
+  getTimelineBadgeColor,
+  mergeEntityTypesForImport,
+} from "./utils/worldData";
+import {
+  DEFAULT_RELATION_AUTOMATION_RULES,
+  SEMANTIC_VIEW_REGISTRY,
+  WORLD_DATA_VERSION,
+} from "./worldbuilderRegistry";
+import { removePersistedValue } from "./utils/persistentStorage";
 
-type SortMode = "name-asc" | "type" | "lastModified-desc";
+type PreparedImportDraft = WorldDataWithImages;
 
-type TimelineEvent = {
-  entity: Entity;
-  anno: string;
-  epoca: string;
-  ordineCronologico: string;
-  stato: string;
-  parsedYear: number | null;
-  parsedOrder: number | null;
+type PendingImportPreview = {
+  fileName: string;
+  mode: "merge" | "replace";
+  draft: PreparedImportDraft;
+  mergedEntityTypes: EntityTypeDefinition[];
+  entityReviews: ImportEntityReview[];
 };
 
 type GraphNodeData = {
@@ -126,6 +148,9 @@ const RELATION_TYPE_PLACE_LINKS = new Set(["abita in", "si svolge in", "si trova
 
 
 const ENTITY_TYPES_STORAGE_KEY = "worldbuilder_entity_types";
+const AUTOMATION_RULES_STORAGE_KEY = "worldbuilder_relation_automation_rules_v1";
+const WORKSPACE_PRESETS_STORAGE_KEY = "worldbuilder_workspace_presets_v1";
+const WORKSPACE_GUIDE_STORAGE_KEY = "worldbuilder_workspace_quickstart_v1";
 
 const DEFAULT_ENTITY_TYPES: EntityTypeDefinition[] = [
   {
@@ -377,22 +402,6 @@ const DEFAULT_ENTITY_TYPES: EntityTypeDefinition[] = [
   },
 ];
 
-function parseNumberLike(value: string | undefined): number | null {
-  if (!value) return null;
-
-  const cleaned = value.trim().replace(",", ".");
-  if (!cleaned) return null;
-
-  const direct = Number(cleaned);
-  if (!Number.isNaN(direct)) return direct;
-
-  const match = cleaned.match(/-?\d+(\.\d+)?/);
-  if (!match) return null;
-
-  const extracted = Number(match[0]);
-  return Number.isNaN(extracted) ? null : extracted;
-}
-
 function normalizeDndStats(rawStats: unknown): DndStats | undefined {
   if (!rawStats || typeof rawStats !== "object") return undefined;
 
@@ -598,32 +607,10 @@ function buildGraphMetaLabel(entity: Entity) {
   return metadata.regione?.trim() ?? "";
 }
 
-function compareTimelineEvents(a: TimelineEvent, b: TimelineEvent) {
-  if (a.parsedOrder !== null && b.parsedOrder !== null) {
-    if (a.parsedOrder !== b.parsedOrder) {
-      return a.parsedOrder - b.parsedOrder;
-    }
-  } else if (a.parsedOrder !== null) {
-    return -1;
-  } else if (b.parsedOrder !== null) {
-    return 1;
-  }
-
-  if (a.parsedYear !== null && b.parsedYear !== null) {
-    if (a.parsedYear !== b.parsedYear) {
-      return a.parsedYear - b.parsedYear;
-    }
-  } else if (a.parsedYear !== null) {
-    return -1;
-  } else if (b.parsedYear !== null) {
-    return 1;
-  }
-
-  return a.entity.name.localeCompare(b.entity.name, "it");
-}
-
-function getTimelineBadgeColor(status: string) {
-  return TIMELINE_STATUS_COLORS[status.trim().toLowerCase()] ?? "#374151";
+function relationMatchesGraphFilter(relation: Relation, graphRelationFilter: string) {
+  const normalizedFilter = normalizeRelationType(graphRelationFilter);
+  if (!normalizedFilter || normalizedFilter === "all") return true;
+  return normalizeRelationType(relation.type) === normalizedFilter;
 }
 
 function slugifyEntityTypeId(value: string) {
@@ -640,19 +627,6 @@ function isBuiltInEntityType(type: string) {
   return DEFAULT_ENTITY_TYPES.some((item) => item.id === type);
 }
 
-
-function normalizeMetadataFingerprint(metadata: Entity["metadata"] | undefined) {
-  const entries = Object.entries(metadata ?? {})
-    .map(([key, value]) => [
-      key.trim().toLowerCase(),
-      String(value ?? "").trim().toLowerCase(),
-    ] as const)
-    .filter(([key, value]) => key && value)
-    .sort(([a], [b]) => a.localeCompare(b));
-
-  return JSON.stringify(entries);
-}
-
 function buildImportedEntityName(entities: Entity[], source: Entity): string {
   const baseName = `${source.name} (import)`;
 
@@ -666,47 +640,6 @@ function buildImportedEntityName(entities: Entity[], source: Entity): string {
   }
 
   return `${baseName} ${copyIndex}`;
-}
-
-function mergeEntityTypesForImport(
-  currentTypes: EntityTypeDefinition[],
-  importedTypes: EntityTypeDefinition[]
-) {
-  const map = new Map<string, EntityTypeDefinition>();
-
-  currentTypes.forEach((type) => {
-    map.set(type.id, type);
-  });
-
-  importedTypes.forEach((type) => {
-    const existing = map.get(type.id);
-
-    if (!existing) {
-      map.set(type.id, type);
-      return;
-    }
-
-    const existingFields = existing.fields ?? [];
-    const importedFields = type.fields ?? [];
-
-    const fieldMap = new Map<string, MetadataFieldDefinition>();
-    existingFields.forEach((field) => fieldMap.set(field.key, field));
-    importedFields.forEach((field) => {
-      if (!fieldMap.has(field.key)) {
-        fieldMap.set(field.key, field);
-      }
-    });
-
-    map.set(type.id, {
-      ...existing,
-      label: existing.label || type.label,
-      color: existing.color || type.color,
-      builtIn: existing.builtIn || type.builtIn,
-      fields: Array.from(fieldMap.values()),
-    });
-  });
-
-  return Array.from(map.values());
 }
 
 function sanitizeEntityTypes(
@@ -887,14 +820,6 @@ function getTypeIconGlyph(typeId: string) {
   return "•";
 }
 
-function buildDefaultGraphTypeFilters(entityTypes: EntityTypeDefinition[]) {
-  const next: Record<string, boolean> = {};
-  entityTypes.forEach((item) => {
-    next[item.id] = true;
-  });
-  return next;
-}
-
 function createEntityRecord(
   data: {
     type: EntityType;
@@ -925,94 +850,44 @@ function getActiveGraphEntitiesByFocusedMode(
   relations: Relation[],
   selectedEntity: Entity,
   graphFilter: FocusedGraphFilter,
-  graphTypeFilters: Record<string, boolean>
+  graphTypeFilters: Record<string, boolean>,
+  graphNeighborhoodDepth: GraphNeighborhoodDepth,
+  graphRelationFilter: string
 ) {
-  const level0Ids = new Set<string>([selectedEntity.id]);
-  const level1Ids = new Set<string>();
-  const level2Ids = new Set<string>();
+  const allowedRelations = relations.filter((relation) =>
+    relationMatchesGraphFilter(relation, graphRelationFilter)
+  );
+  const graphEntityIds = new Set<string>([selectedEntity.id]);
+  let frontier = new Set<string>([selectedEntity.id]);
 
-  const baseRelations = relations.filter((relation) => {
-    if (graphFilter === "all") {
-      return (
-        relation.fromEntityId === selectedEntity.id ||
-        relation.toEntityId === selectedEntity.id
-      );
-    }
+  for (let depth = 1; depth <= graphNeighborhoodDepth; depth += 1) {
+    const nextFrontier = new Set<string>();
 
-    if (graphFilter === "outgoing") {
-      return relation.fromEntityId === selectedEntity.id;
-    }
-
-    return relation.toEntityId === selectedEntity.id;
-  });
-
-  baseRelations.forEach((relation) => {
-    if (graphFilter === "all") {
-      if (relation.fromEntityId === selectedEntity.id) {
-        level1Ids.add(relation.toEntityId);
-      }
-      if (relation.toEntityId === selectedEntity.id) {
-        level1Ids.add(relation.fromEntityId);
-      }
-    }
-
-    if (graphFilter === "outgoing" && relation.fromEntityId === selectedEntity.id) {
-      level1Ids.add(relation.toEntityId);
-    }
-
-    if (graphFilter === "incoming" && relation.toEntityId === selectedEntity.id) {
-      level1Ids.add(relation.fromEntityId);
-    }
-  });
-
-  relations.forEach((relation) => {
-    if (graphFilter === "all") {
-      const fromInLevel1 = level1Ids.has(relation.fromEntityId);
-      const toInLevel1 = level1Ids.has(relation.toEntityId);
-
-      if (
-        fromInLevel1 &&
-        !level0Ids.has(relation.toEntityId) &&
-        !level1Ids.has(relation.toEntityId)
-      ) {
-        level2Ids.add(relation.toEntityId);
+    allowedRelations.forEach((relation) => {
+      if (graphFilter === "all" || graphFilter === "outgoing") {
+        if (frontier.has(relation.fromEntityId) && relation.toEntityId !== selectedEntity.id) {
+          nextFrontier.add(relation.toEntityId);
+        }
       }
 
-      if (
-        toInLevel1 &&
-        !level0Ids.has(relation.fromEntityId) &&
-        !level1Ids.has(relation.fromEntityId)
-      ) {
-        level2Ids.add(relation.fromEntityId);
+      if (graphFilter === "all" || graphFilter === "incoming") {
+        if (frontier.has(relation.toEntityId) && relation.fromEntityId !== selectedEntity.id) {
+          nextFrontier.add(relation.fromEntityId);
+        }
       }
-    }
+    });
 
-    if (graphFilter === "outgoing") {
-      if (
-        level1Ids.has(relation.fromEntityId) &&
-        !level0Ids.has(relation.toEntityId) &&
-        !level1Ids.has(relation.toEntityId)
-      ) {
-        level2Ids.add(relation.toEntityId);
-      }
-    }
+    frontier = new Set(
+      [...nextFrontier].filter((entityId) => {
+        if (entityId === selectedEntity.id) return true;
+        const entity = entities.find((candidate) => candidate.id === entityId);
+        if (!entity) return false;
+        return Boolean(graphTypeFilters[entity.type]);
+      })
+    );
 
-    if (graphFilter === "incoming") {
-      if (
-        level1Ids.has(relation.toEntityId) &&
-        !level0Ids.has(relation.fromEntityId) &&
-        !level1Ids.has(relation.fromEntityId)
-      ) {
-        level2Ids.add(relation.fromEntityId);
-      }
-    }
-  });
-
-  let graphEntityIds = new Set<string>([
-    ...level0Ids,
-    ...level1Ids,
-    ...level2Ids,
-  ]);
+    frontier.forEach((entityId) => graphEntityIds.add(entityId));
+  }
 
   const allowedEntityIds = new Set<string>();
 
@@ -1023,44 +898,24 @@ function getActiveGraphEntitiesByFocusedMode(
     }
   });
 
-  graphEntityIds = new Set(
+  const filteredGraphEntityIds = new Set(
     [...graphEntityIds].filter((id) => allowedEntityIds.has(id))
   );
 
-  const localEntities = entities.filter((entity) => graphEntityIds.has(entity.id));
+  const localEntities = entities.filter((entity) => filteredGraphEntityIds.has(entity.id));
 
-  const localRelations = relations.filter((relation) => {
+  const localRelations = allowedRelations.filter((relation) => {
     const bothInside =
-      graphEntityIds.has(relation.fromEntityId) &&
-      graphEntityIds.has(relation.toEntityId);
+      filteredGraphEntityIds.has(relation.fromEntityId) &&
+      filteredGraphEntityIds.has(relation.toEntityId);
 
     if (!bothInside) return false;
-
-    if (graphFilter === "all") return true;
-
-    if (graphFilter === "outgoing") {
-      return (
-        (level0Ids.has(relation.fromEntityId) &&
-          level1Ids.has(relation.toEntityId)) ||
-        (level1Ids.has(relation.fromEntityId) &&
-          level2Ids.has(relation.toEntityId))
-      );
-    }
-
-    return (
-      (level1Ids.has(relation.fromEntityId) &&
-        level0Ids.has(relation.toEntityId)) ||
-      (level2Ids.has(relation.fromEntityId) &&
-        level1Ids.has(relation.toEntityId))
-    );
+    return true;
   });
 
   return {
     localEntities,
     localRelations,
-    level0Ids,
-    level1Ids,
-    level2Ids,
   };
 }
 
@@ -1371,6 +1226,16 @@ function parseAssetImageRef(value?: string | null): string | null {
   return String(value).slice(IMAGE_ASSET_PREFIX.length) || null;
 }
 
+function getAssetIdsFromImageRefs(imageRefs: Array<string | undefined | null>): string[] {
+  return Array.from(
+    new Set(
+      imageRefs
+        .map((imageRef) => parseAssetImageRef(imageRef))
+        .filter((assetId): assetId is string => Boolean(assetId))
+    )
+  );
+}
+
 function dataUrlToBlob(dataUrl: string): Blob {
   const parts = dataUrl.split(",");
   if (parts.length < 2) {
@@ -1513,10 +1378,40 @@ async function deleteAllImageAssets(): Promise<void> {
   });
 }
 
+async function deleteImageAssetById(assetId: string): Promise<void> {
+  const database = await openImageAssetDatabase();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(IMAGE_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(IMAGE_STORE_NAME);
+    const request = store.delete(assetId);
+
+    request.onsuccess = () => {
+      database.close();
+      resolve();
+    };
+    request.onerror = () => {
+      database.close();
+      reject(request.error ?? new Error("Impossibile cancellare l'immagine"));
+    };
+  });
+}
+
+async function deleteImageAssetsByIds(assetIds: string[]): Promise<void> {
+  const uniqueAssetIds = Array.from(new Set(assetIds.filter(Boolean)));
+  await Promise.all(
+    uniqueAssetIds.map((assetId) => deleteImageAssetById(assetId))
+  );
+}
+
 export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const floatingMenuRef = useRef<HTMLDivElement | null>(null);
+  const viewportWidth = useViewportWidth();
+  const isCompactWorkspace = viewportWidth < 1240;
+  const isStackedWorkspace = viewportWidth < 940;
+  const isCompactTopBar = viewportWidth < 1040;
 
   const [rawEntities, setRawEntities] = useLocalStorageState<Entity[]>(
     ENTITIES_STORAGE_KEY,
@@ -1549,92 +1444,99 @@ export default function App() {
     [sanitizedEntities, relations]
   );
 
-  const [selectedId, setSelectedId] = useState<string>(
-    () => initialEntities[0]?.id ?? ""
+  const [packageModalOpen, setPackageModalOpen] = useState(false);
+  const [pendingImportPreview, setPendingImportPreview] =
+    useState<PendingImportPreview | null>(null);
+  const [isApplyingImport, setIsApplyingImport] = useState(false);
+  const [relationAutomationRules, setRelationAutomationRules] =
+    useLocalStorageState<RelationAutomationRule[]>(
+      AUTOMATION_RULES_STORAGE_KEY,
+      DEFAULT_RELATION_AUTOMATION_RULES
+    );
+  const [workspacePresets, setWorkspacePresets] = useLocalStorageState<WorkspacePreset[]>(
+    WORKSPACE_PRESETS_STORAGE_KEY,
+    []
   );
-  const [view, setView] = useState<"dashboard" | "workspace" | "graph">("dashboard");
-  const [search, setSearch] = useState("");
-  const [archiveTypeFilter, setArchiveTypeFilter] = useState<"all" | EntityType>("all");
-  const [tagFilter, setTagFilter] = useState("");
-  const [sortMode, setSortMode] = useState<SortMode>("lastModified-desc");
+  const [workspaceGuideState, setWorkspaceGuideState] = useLocalStorageState<{
+    dismissed: boolean;
+  }>(WORKSPACE_GUIDE_STORAGE_KEY, { dismissed: false });
 
-  const [isCreatingEntity, setIsCreatingEntity] = useState(false);
-  const [createEntityType, setCreateEntityType] = useState<EntityType>("luogo");
-  const [isFloatingCreateOpen, setIsFloatingCreateOpen] = useState(false);
+  const {
+    selectedId,
+    setSelectedId,
+    view,
+    setView,
+    search,
+    setSearch,
+    archiveTypeFilter,
+    setArchiveTypeFilter,
+    tagFilter,
+    setTagFilter,
+    sortMode,
+    setSortMode,
+    semanticView,
+    setSemanticView,
+    isCreatingEntity,
+    setIsCreatingEntity,
+    createEntityType,
+    setCreateEntityType,
+    isFloatingCreateOpen,
+    setIsFloatingCreateOpen,
+    newTag,
+    setNewTag,
+    relationType,
+    setRelationType,
+    relationInverseType,
+    setRelationInverseType,
+    relationTargetId,
+    setRelationTargetId,
+    graphViewMode,
+    setGraphViewMode,
+    graphFilter,
+    setGraphFilter,
+    graphViewType,
+    setGraphViewType,
+    graphViewTag,
+    setGraphViewTag,
+    graphRelationFilter,
+    setGraphRelationFilter,
+    graphNeighborhoodDepth,
+    setGraphNeighborhoodDepth,
+    graphTypeFilters,
+    setGraphTypeFilters,
+    timelinePeriodFilter,
+    setTimelinePeriodFilter,
+    workspaceRailView,
+    setWorkspaceRailView,
+    isWorkspaceToolsOpen,
+    setIsWorkspaceToolsOpen,
+    allTags,
+    filteredEntities,
+    selectedEntity,
+    relationSuggestions,
+    semanticScope,
+    availableRelationTargets,
+    selectedEntityRelations,
+    timelineEvents,
+    timelinePeriods,
+    workspaceRailTabs,
+    quickCreateOptions,
+    toggleGraphTypeFilter,
+  } = useWorkspaceState({
+    entities,
+    relations,
+    entityTypes,
+    relationAutomationRules,
+    initialSelectedId: initialEntities[0]?.id ?? "",
+    defaultRelationType: RELATION_PRESETS[DEFAULT_RELATION_PRESET_INDEX]?.type ?? "",
+    defaultRelationInverseType:
+      RELATION_PRESETS[DEFAULT_RELATION_PRESET_INDEX]?.inverseType ?? "",
+  });
 
-  const [newTag, setNewTag] = useState("");
-  const [relationType, setRelationType] = useState(
-    RELATION_PRESETS[DEFAULT_RELATION_PRESET_INDEX]?.type ?? ""
-  );
-  const [relationInverseType, setRelationInverseType] = useState(
-    RELATION_PRESETS[DEFAULT_RELATION_PRESET_INDEX]?.inverseType ?? ""
-  );
-  const [relationTargetId, setRelationTargetId] = useState<string | "">("");
-
-  const [graphViewMode, setGraphViewMode] = useState<GraphViewMode>("focused");
-  const [graphFilter, setGraphFilter] = useState<FocusedGraphFilter>("all");
-  const [graphViewType, setGraphViewType] = useState<"all" | EntityType>("all");
-  const [graphViewTag, setGraphViewTag] = useState("");
-  const [graphTypeFilters, setGraphTypeFilters] = useState<Record<string, boolean>>(
-    () => buildDefaultGraphTypeFilters(DEFAULT_ENTITY_TYPES)
-  );
-
-  const [timelinePeriodFilter, setTimelinePeriodFilter] = useState("all");
-
-  useEffect(() => {
-    const nextFilterState = buildDefaultGraphTypeFilters(entityTypes);
-
-    setGraphTypeFilters((current) => {
-      const merged = { ...nextFilterState, ...current };
-
-      entityTypes.forEach((item) => {
-        if (typeof merged[item.id] !== "boolean") {
-          merged[item.id] = true;
-        }
-      });
-
-      return merged;
-    });
-  }, [entityTypes]);
-
-  useEffect(() => {
-    const exists = entities.some((entity) => entity.id === selectedId);
-    if (!exists) {
-      setSelectedId(entities[0]?.id ?? "");
-    }
-  }, [entities, selectedId]);
-
-  useEffect(() => {
-    const exists = entityTypes.some((type) => type.id === createEntityType);
-    if (!exists) {
-      setCreateEntityType(entityTypes[0]?.id ?? "luogo");
-    }
-  }, [entityTypes, createEntityType]);
-
-  useEffect(() => {
-    if (
-      graphViewType !== "all" &&
-      !entityTypes.some((type) => type.id === graphViewType)
-    ) {
-      setGraphViewType("all");
-    }
-  }, [entityTypes, graphViewType]);
-
-  useEffect(() => {
-    setRelationTargetId("");
-  }, [selectedId]);
-
-  const allTags = useMemo(() => {
-    return [...new Set(entities.flatMap((entity) => entity.tags))]
-      .filter(Boolean)
-      .sort((a, b) => a.localeCompare(b, "it"));
-  }, [entities]);
-
-  useEffect(() => {
-    if (!graphViewTag && allTags.length > 0) {
-      setGraphViewTag(allTags[0]);
-    }
-  }, [allTags, graphViewTag]);
+  const showWorkspaceGuide =
+    view === "workspace" &&
+    !workspaceGuideState.dismissed &&
+    (entities.length <= 12 || relations.length <= 18);
 
   useEffect(() => {
     function handleWindowClick(event: MouseEvent) {
@@ -1647,118 +1549,7 @@ export default function App() {
 
     window.addEventListener("mousedown", handleWindowClick);
     return () => window.removeEventListener("mousedown", handleWindowClick);
-  }, []);
-
-  const filteredEntities = useMemo(() => {
-    const q = search.trim().toLowerCase();
-
-    const result = entities.filter((entity) => {
-      const typeLabel = getTypeLabel(entity.type, entityTypes).toLowerCase();
-
-      const matchesType =
-        archiveTypeFilter === "all" || entity.type === archiveTypeFilter;
-
-      const matchesTag =
-        !tagFilter ||
-        entity.tags.some((tag) => tag.toLowerCase() === tagFilter.toLowerCase());
-
-      const metadataMatches = Object.values(entity.metadata ?? {}).some((value) =>
-        value.toLowerCase().includes(q)
-      );
-
-      const matchesSearch =
-        !q ||
-        entity.name.toLowerCase().includes(q) ||
-        entity.shortDescription.toLowerCase().includes(q) ||
-        entity.notes.toLowerCase().includes(q) ||
-        entity.type.toLowerCase().includes(q) ||
-        typeLabel.includes(q) ||
-        entity.tags.some((tag) => tag.toLowerCase().includes(q)) ||
-        metadataMatches;
-
-      return matchesType && matchesTag && matchesSearch;
-    });
-
-    result.sort((a, b) => {
-      if (sortMode === "name-asc") {
-        return a.name.localeCompare(b.name, "it");
-      }
-
-      if (sortMode === "type") {
-        const typeCompare = getTypeLabel(a.type, entityTypes).localeCompare(
-          getTypeLabel(b.type, entityTypes),
-          "it"
-        );
-        if (typeCompare !== 0) return typeCompare;
-        return a.name.localeCompare(b.name, "it");
-      }
-
-      return b.lastModified - a.lastModified;
-    });
-
-    return result;
-  }, [entities, search, archiveTypeFilter, tagFilter, sortMode, entityTypes]);
-
-  const selectedEntity =
-    entities.find((entity) => entity.id === selectedId) ?? null;
-
-  const availableRelationTargets = selectedEntity
-    ? entities.filter((entity) => entity.id !== selectedEntity.id)
-    : [];
-
-  const selectedEntityRelations = selectedEntity
-    ? relations.filter(
-        (relation) =>
-          relation.fromEntityId === selectedEntity.id ||
-          relation.toEntityId === selectedEntity.id
-      )
-    : [];
-
-  const timelineEvents = useMemo<TimelineEvent[]>(() => {
-    return entities
-      .filter((entity) => entity.type === "evento")
-      .map((entity) => {
-        const metadata = entity.metadata ?? {};
-        const anno = metadata.anno ?? "";
-        const epoca = metadata.epoca ?? "";
-        const ordineCronologico = metadata.ordineCronologico ?? "";
-        const stato = metadata.stato ?? "";
-
-        return {
-          entity,
-          anno,
-          epoca,
-          ordineCronologico,
-          stato,
-          parsedYear: parseNumberLike(anno),
-          parsedOrder: parseNumberLike(ordineCronologico),
-        };
-      })
-      .sort(compareTimelineEvents);
-  }, [entities]);
-
-  const timelinePeriods = useMemo(() => {
-    return [...new Set(timelineEvents.map((event) => event.epoca).filter(Boolean))]
-      .sort((a, b) => a.localeCompare(b, "it"));
-  }, [timelineEvents]);
-
-  const filteredTimelineEvents = useMemo(() => {
-    if (timelinePeriodFilter === "all") {
-      return timelineEvents;
-    }
-
-    return timelineEvents.filter(
-      (event) => event.epoca.toLowerCase() === timelinePeriodFilter.toLowerCase()
-    );
-  }, [timelineEvents, timelinePeriodFilter]);
-
-  const quickCreateOptions = useMemo(() => {
-    return entityTypes.slice(0, 8).map((type) => ({
-      value: type.id,
-      label: type.label,
-      color: type.color,
-    }));
-  }, [entityTypes]);
+  }, [setIsFloatingCreateOpen]);
 
   function getEntityById(id: string) {
     return entities.find((entity) => entity.id === id);
@@ -1955,13 +1746,6 @@ export default function App() {
     });
   }
 
-  function toggleGraphTypeFilter(type: EntityType) {
-    setGraphTypeFilters((current) => ({
-      ...current,
-      [type]: !current[type],
-    }));
-  }
-
   function updateSelectedEntity(patch: Partial<Entity>) {
     if (!selectedEntity) return;
 
@@ -2120,6 +1904,210 @@ export default function App() {
     return true;
   }
 
+  function handleUpdateEntityType(nextTypeInput: EntityTypeDefinition): boolean {
+    const currentType = entityTypes.find((type) => type.id === nextTypeInput.id);
+
+    if (!currentType || currentType.builtIn) {
+      alert("Puoi modificare solo tipi custom esistenti.");
+      return false;
+    }
+
+    const normalizedLabel = normalizeText(nextTypeInput.label ?? "");
+    if (!normalizedLabel) {
+      alert("Il nome del tipo è obbligatorio.");
+      return false;
+    }
+
+    const duplicateLabel = entityTypes.some(
+      (type) =>
+        type.id !== currentType.id &&
+        normalizeText(type.label).toLowerCase() === normalizedLabel.toLowerCase()
+    );
+
+    if (duplicateLabel) {
+      alert("Esiste già un tipo con questo nome.");
+      return false;
+    }
+
+    const nextFields: MetadataFieldDefinition[] = (nextTypeInput.fields ?? []).map((field) => ({
+      key: field.key.trim(),
+      label: normalizeText(field.label ?? ""),
+      kind:
+        field.kind === "textarea" || field.kind === "entity-reference"
+          ? field.kind
+          : "text",
+      placeholder: normalizeText(field.placeholder ?? "") || undefined,
+      required: Boolean(field.required) || undefined,
+      allowedEntityTypes:
+        field.kind === "entity-reference" && Array.isArray(field.allowedEntityTypes)
+          ? field.allowedEntityTypes.filter((typeId) =>
+              entityTypes.some((type) => type.id === typeId)
+            )
+          : undefined,
+      relationType:
+        field.kind === "entity-reference"
+          ? normalizeText(field.relationType ?? "") || undefined
+          : undefined,
+      relationInverseType:
+        field.kind === "entity-reference"
+          ? normalizeText(field.relationInverseType ?? "") || undefined
+          : undefined,
+      autoCreateTarget:
+        field.kind === "entity-reference" && field.autoCreateTarget
+          ? true
+          : undefined,
+      autoCreateTargetType:
+        field.kind === "entity-reference" &&
+        typeof field.autoCreateTargetType === "string" &&
+        entityTypes.some((type) => type.id === field.autoCreateTargetType)
+          ? field.autoCreateTargetType
+          : undefined,
+    }));
+
+    if (nextFields.some((field) => !field.key || !field.label)) {
+      alert("Ogni campo deve avere almeno chiave ed etichetta.");
+      return false;
+    }
+
+    const fieldKeySet = new Set<string>();
+    for (const field of nextFields) {
+      const normalizedKey = field.key.toLowerCase();
+      if (fieldKeySet.has(normalizedKey)) {
+        alert(`La chiave campo "${field.key}" è duplicata.`);
+        return false;
+      }
+      fieldKeySet.add(normalizedKey);
+    }
+
+    const entitiesOfType = entities.filter((entity) => entity.type === currentType.id);
+    const nextFieldKeys = new Set(nextFields.map((field) => field.key));
+    const removedFieldKeys = (currentType.fields ?? [])
+      .map((field) => field.key)
+      .filter((fieldKey) => !nextFieldKeys.has(fieldKey));
+
+    const blockedFieldKey = removedFieldKeys.find((fieldKey) =>
+      entitiesOfType.some((entity) => entity.metadata?.[fieldKey]?.trim())
+    );
+
+    if (blockedFieldKey) {
+      alert(
+        `Il campo "${blockedFieldKey}" contiene ancora dati in alcune entità. Svuotalo prima di rimuoverlo o rinominarlo.`
+      );
+      return false;
+    }
+
+    const nextType: EntityTypeDefinition = {
+      ...currentType,
+      label: normalizedLabel,
+      color: nextTypeInput.color?.trim() || currentType.color,
+      fields: nextFields,
+    };
+
+    const disabledMetadataRelationFieldKeys = (currentType.fields ?? [])
+      .filter((field) => field.kind === "entity-reference")
+      .map((field) => field.key)
+      .filter((fieldKey) => {
+        const nextField = nextFields.find((field) => field.key === fieldKey);
+        if (!nextField) return true;
+        if (nextField.kind !== "entity-reference") return true;
+        return !normalizeText(nextField.relationType ?? "");
+      });
+
+    const entityIdSet = new Set(entitiesOfType.map((entity) => entity.id));
+    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+
+    setRawEntityTypes((current) =>
+      sanitizeEntityTypes(current).map((type) =>
+        type.id === nextType.id ? nextType : type
+      )
+    );
+
+    setRawEntities((current) =>
+      sanitizeEntities(current).map((entity) => {
+        if (entity.type !== nextType.id) return entity;
+
+        const metadata = Object.fromEntries(
+          nextFields.map((field) => [
+            field.key,
+            normalizeMetadataValue(entity.metadata?.[field.key] ?? ""),
+          ])
+        );
+
+        return {
+          ...entity,
+          metadata,
+          updatedAt: nowIso,
+          lastModified: nowMs,
+        };
+      })
+    );
+
+    if (disabledMetadataRelationFieldKeys.length > 0) {
+      const disabledFieldKeySet = new Set(disabledMetadataRelationFieldKeys);
+
+      setRawRelations((current) =>
+        sanitizeRelations(current).filter(
+          (relation) =>
+            !(
+              relation.source === "metadata" &&
+              entityIdSet.has(relation.fromEntityId) &&
+              relation.sourceFieldKey &&
+              disabledFieldKeySet.has(relation.sourceFieldKey)
+            )
+        )
+      );
+    }
+
+    return true;
+  }
+
+  function handleDeleteEntityType(typeId: EntityType): boolean {
+    const currentType = entityTypes.find((type) => type.id === typeId);
+
+    if (!currentType || currentType.builtIn) {
+      alert("Puoi eliminare solo tipi custom.");
+      return false;
+    }
+
+    const usageCount = entities.filter((entity) => entity.type === typeId).length;
+    if (usageCount > 0) {
+      alert(
+        `Il tipo "${currentType.label}" è ancora usato da ${usageCount} entità. Sposta o elimina prima quelle entità.`
+      );
+      return false;
+    }
+
+    const confirmed = window.confirm(
+      `Vuoi davvero eliminare il tipo "${currentType.label}"?`
+    );
+    if (!confirmed) return false;
+
+    setRawEntityTypes((current) =>
+      sanitizeEntityTypes(current).filter((type) => type.id !== typeId || type.builtIn)
+    );
+
+    if (createEntityType === typeId) {
+      setCreateEntityType(entityTypes[0]?.id ?? "luogo");
+    }
+
+    if (archiveTypeFilter === typeId) {
+      setArchiveTypeFilter("all");
+    }
+
+    if (graphViewType === typeId) {
+      setGraphViewType("all");
+    }
+
+    setGraphTypeFilters((current) => {
+      const next = { ...current };
+      delete next[typeId];
+      return next;
+    });
+
+    return true;
+  }
+
   function duplicateSelectedEntity() {
     if (!selectedEntity) return;
 
@@ -2144,7 +2132,7 @@ export default function App() {
     setNewTag("");
   }
 
-  function deleteSelectedEntity() {
+  const deleteSelectedEntity = useCallback(() => {
     if (!selectedEntity) return;
 
     const confirmed = window.confirm(
@@ -2163,7 +2151,14 @@ export default function App() {
           relation.toEntityId !== selectedEntity.id
       )
     );
-  }
+
+    const remainingEntities = entities.filter(
+      (entity) => entity.id !== selectedEntity.id
+    );
+    setSelectedId(remainingEntities[0]?.id ?? "");
+    setNewTag("");
+    setRelationTargetId("");
+  }, [entities, selectedEntity, setNewTag, setRawEntities, setRawRelations, setRelationTargetId, setSelectedId]);
 
   useEffect(() => {
     function handleKeyboardShortcuts(event: KeyboardEvent) {
@@ -2199,7 +2194,14 @@ export default function App() {
 
     window.addEventListener("keydown", handleKeyboardShortcuts);
     return () => window.removeEventListener("keydown", handleKeyboardShortcuts);
-  }, [isCreatingEntity, isFloatingCreateOpen, selectedEntity]);
+  }, [
+    deleteSelectedEntity,
+    isCreatingEntity,
+    isFloatingCreateOpen,
+    selectedEntity,
+    setIsCreatingEntity,
+    setIsFloatingCreateOpen,
+  ]);
 
   function resetAllData() {
     const confirmed = window.confirm(
@@ -2214,6 +2216,18 @@ export default function App() {
     localStorage.removeItem(ENTITIES_STORAGE_KEY);
     localStorage.removeItem(RELATIONS_STORAGE_KEY);
     localStorage.removeItem(ENTITY_TYPES_STORAGE_KEY);
+    localStorage.removeItem(AUTOMATION_RULES_STORAGE_KEY);
+    localStorage.removeItem(WORKSPACE_PRESETS_STORAGE_KEY);
+
+    void Promise.all([
+      removePersistedValue(ENTITIES_STORAGE_KEY),
+      removePersistedValue(RELATIONS_STORAGE_KEY),
+      removePersistedValue(ENTITY_TYPES_STORAGE_KEY),
+      removePersistedValue(AUTOMATION_RULES_STORAGE_KEY),
+      removePersistedValue(WORKSPACE_PRESETS_STORAGE_KEY),
+    ]).catch((error) => {
+      console.error(error);
+    });
 
     setRawEntityTypes(DEFAULT_ENTITY_TYPES);
     setRawEntities(
@@ -2228,6 +2242,7 @@ export default function App() {
     setArchiveTypeFilter("all");
     setTagFilter("");
     setSortMode("lastModified-desc");
+    setSemanticView("default");
     setIsCreatingEntity(false);
     setCreateEntityType("luogo");
     setNewTag("");
@@ -2240,9 +2255,15 @@ export default function App() {
     setGraphFilter("all");
     setGraphViewType("all");
     setGraphViewTag("");
+    setGraphRelationFilter("all");
+    setGraphNeighborhoodDepth(2);
     setTimelinePeriodFilter("all");
     setGraphTypeFilters(buildDefaultGraphTypeFilters(DEFAULT_ENTITY_TYPES));
     setIsFloatingCreateOpen(false);
+    setPendingImportPreview(null);
+    setPackageModalOpen(false);
+    setRelationAutomationRules(DEFAULT_RELATION_AUTOMATION_RULES);
+    setWorkspacePresets([]);
   }
 
   async function exportData() {
@@ -2252,6 +2273,7 @@ export default function App() {
       );
 
       const data: WorldDataWithImages = {
+        version: WORLD_DATA_VERSION,
         entityTypes,
         entities,
         relations,
@@ -2377,6 +2399,287 @@ export default function App() {
     return entitiesValid && relationsValid && entityTypesValid && imageAssetsValid;
   }
 
+  function buildImportDraft(parsed: WorldDataWithImages): PreparedImportDraft {
+    const importedEntities = sanitizeEntities(parsed.entities);
+    const importedEntityIdSet = new Set(importedEntities.map((entity) => entity.id));
+    const importedEntityTypes = sanitizeEntityTypes(
+      parsed.entityTypes ?? DEFAULT_ENTITY_TYPES,
+      importedEntities
+    );
+
+    const importedRelations = parsed.relations
+      .map((relation) => ({
+        ...relation,
+        id:
+          typeof relation.id === "string" && relation.id
+            ? relation.id
+            : crypto.randomUUID(),
+        fromEntityId: relation.fromEntityId,
+        toEntityId: relation.toEntityId,
+        type: normalizeRelationType(relation.type),
+        inverseType: normalizeOptionalRelationType(relation.inverseType),
+        source:
+          relation.source === "manual" || relation.source === "metadata"
+            ? relation.source
+            : undefined,
+        sourceFieldKey:
+          typeof relation.sourceFieldKey === "string"
+            ? relation.sourceFieldKey
+            : undefined,
+      }))
+      .filter(
+        (relation) =>
+          relation.id &&
+          relation.type &&
+          importedEntityIdSet.has(relation.fromEntityId) &&
+          importedEntityIdSet.has(relation.toEntityId)
+      );
+
+    return {
+      entityTypes: importedEntityTypes,
+      entities: importedEntities,
+      relations: importedRelations,
+      imageAssets: parsed.imageAssets,
+    };
+  }
+
+  async function materializeImportDraft(
+    draft: PreparedImportDraft
+  ): Promise<PreparedImportDraft> {
+    const importedEntities = await Promise.all(
+      draft.entities.map(async (entity) => {
+        if (
+          typeof entity.image === "string" &&
+          entity.image.startsWith("data:image/")
+        ) {
+          try {
+            const image = await saveDataUrlImageAsAssetRef(entity.image);
+            return { ...entity, image };
+          } catch (error) {
+            console.error(error);
+          }
+        }
+
+        return entity;
+      })
+    );
+
+    await importImageAssetsFromWorldData(draft.imageAssets);
+
+    const importedEntityIdSet = new Set(importedEntities.map((entity) => entity.id));
+    const importedRelations = draft.relations.filter(
+      (relation) =>
+        importedEntityIdSet.has(relation.fromEntityId) &&
+        importedEntityIdSet.has(relation.toEntityId)
+    );
+
+    return {
+      ...draft,
+      entityTypes: sanitizeEntityTypes(draft.entityTypes ?? DEFAULT_ENTITY_TYPES, importedEntities),
+      entities: importedEntities,
+      relations: importedRelations,
+    };
+  }
+
+  function resetWorkspaceUi(nextEntityTypes: EntityTypeDefinition[], nextSelectedId: string) {
+    setSelectedId(nextSelectedId);
+    setSearch("");
+    setArchiveTypeFilter("all");
+    setTagFilter("");
+    setSortMode("lastModified-desc");
+    setIsCreatingEntity(false);
+    setCreateEntityType(nextEntityTypes[0]?.id ?? "luogo");
+    setNewTag("");
+    setRelationType(RELATION_PRESETS[DEFAULT_RELATION_PRESET_INDEX]?.type ?? "");
+    setRelationInverseType(
+      RELATION_PRESETS[DEFAULT_RELATION_PRESET_INDEX]?.inverseType ?? ""
+    );
+    setRelationTargetId("");
+    setGraphViewMode("focused");
+    setGraphFilter("all");
+    setGraphViewType("all");
+    setGraphViewTag("");
+    setGraphRelationFilter("all");
+    setGraphNeighborhoodDepth(2);
+    setTimelinePeriodFilter("all");
+    setGraphTypeFilters(buildDefaultGraphTypeFilters(nextEntityTypes));
+    setIsFloatingCreateOpen(false);
+  }
+
+  function applyReplaceImport(draft: PreparedImportDraft) {
+    const currentAssetIds = getAssetIdsFromImageRefs(entities.map((entity) => entity.image));
+    const importedAssetIds = new Set(
+      getAssetIdsFromImageRefs(draft.entities.map((entity) => entity.image))
+    );
+    const obsoleteAssetIds = currentAssetIds.filter(
+      (assetId) => !importedAssetIds.has(assetId)
+    );
+
+    setRawEntityTypes(draft.entityTypes ?? DEFAULT_ENTITY_TYPES);
+    setRawEntities(draft.entities);
+    setRawRelations(draft.relations);
+    resetWorkspaceUi(draft.entityTypes ?? DEFAULT_ENTITY_TYPES, draft.entities[0]?.id ?? "");
+
+    void deleteImageAssetsByIds(obsoleteAssetIds).catch((error) => {
+      console.error(error);
+    });
+  }
+
+  function applyMergeImport(
+    draft: PreparedImportDraft,
+    entityReviews: ImportEntityReview[],
+    mergedEntityTypes: EntityTypeDefinition[]
+  ) {
+    const currentEntities = sanitizeEntities(rawEntities);
+    const currentRelations = sanitizeRelations(rawRelations);
+    const nextEntities = [...currentEntities];
+    const usedIds = new Set(nextEntities.map((entity) => entity.id));
+    const currentEntitiesById = new Map(
+      nextEntities.map((entity) => [entity.id, entity] as const)
+    );
+    const idMap = new Map<string, string>();
+    const reviewByImportedId = new Map(
+      entityReviews.map((review) => [review.importedEntity.id, review] as const)
+    );
+
+    draft.entities.forEach((importedEntity) => {
+      const review = reviewByImportedId.get(importedEntity.id);
+      const matchedEntity = review?.matchedEntity;
+
+      if (review?.status === "duplicate" && matchedEntity) {
+        idMap.set(importedEntity.id, matchedEntity.id);
+        return;
+      }
+
+      if (review?.status === "probable-match" && matchedEntity) {
+        const currentMatched = currentEntitiesById.get(matchedEntity.id) ?? matchedEntity;
+        const mergedEntity: Entity = {
+          ...currentMatched,
+          shortDescription:
+            currentMatched.shortDescription || importedEntity.shortDescription,
+          notes: currentMatched.notes || importedEntity.notes,
+          image: currentMatched.image || importedEntity.image,
+          tags: Array.from(new Set([...currentMatched.tags, ...importedEntity.tags])),
+          metadata: {
+            ...(importedEntity.metadata ?? {}),
+            ...(currentMatched.metadata ?? {}),
+          },
+          updatedAt: new Date().toISOString(),
+          lastModified: Date.now(),
+        };
+
+        const index = nextEntities.findIndex((entity) => entity.id === currentMatched.id);
+        if (index >= 0) {
+          nextEntities[index] = mergedEntity;
+        }
+
+        currentEntitiesById.set(mergedEntity.id, mergedEntity);
+        idMap.set(importedEntity.id, mergedEntity.id);
+        return;
+      }
+
+      let nextId = importedEntity.id;
+      if (usedIds.has(nextId)) {
+        nextId = crypto.randomUUID();
+      }
+
+      const entityToInsert: Entity = {
+        ...importedEntity,
+        id: nextId,
+        name: hasDuplicateEntityName(nextEntities, importedEntity.type, importedEntity.name)
+          ? buildImportedEntityName(nextEntities, importedEntity)
+          : importedEntity.name,
+      };
+
+      usedIds.add(entityToInsert.id);
+      nextEntities.push(entityToInsert);
+      currentEntitiesById.set(entityToInsert.id, entityToInsert);
+      idMap.set(importedEntity.id, entityToInsert.id);
+    });
+
+    const relationSignatureSet = new Set(
+      currentRelations.map((relation) =>
+        [
+          relation.fromEntityId,
+          relation.toEntityId,
+          normalizeRelationType(relation.type),
+          normalizeOptionalRelationType(relation.inverseType) ?? "",
+          relation.source ?? "",
+          relation.sourceFieldKey ?? "",
+        ].join("::")
+      )
+    );
+
+    const nextRelations = [...currentRelations];
+
+    draft.relations.forEach((relation) => {
+      const mappedFrom = idMap.get(relation.fromEntityId);
+      const mappedTo = idMap.get(relation.toEntityId);
+
+      if (!mappedFrom || !mappedTo || mappedFrom === mappedTo) return;
+
+      const normalizedType = normalizeRelationType(relation.type);
+      const normalizedInverseType = normalizeOptionalRelationType(relation.inverseType);
+      const signature = [
+        mappedFrom,
+        mappedTo,
+        normalizedType,
+        normalizedInverseType ?? "",
+        relation.source ?? "",
+        relation.sourceFieldKey ?? "",
+      ].join("::");
+
+      if (relationSignatureSet.has(signature)) return;
+
+      relationSignatureSet.add(signature);
+      nextRelations.push({
+        ...relation,
+        id: crypto.randomUUID(),
+        fromEntityId: mappedFrom,
+        toEntityId: mappedTo,
+        type: normalizedType,
+        inverseType: normalizedInverseType,
+      });
+    });
+
+    setRawEntityTypes(mergedEntityTypes);
+    setRawEntities(nextEntities);
+    setRawRelations(nextRelations);
+    resetWorkspaceUi(mergedEntityTypes, nextEntities[0]?.id ?? "");
+  }
+
+  async function applyPendingImportPreview() {
+    if (!pendingImportPreview) return;
+
+    setIsApplyingImport(true);
+
+    try {
+      const materializedDraft = await materializeImportDraft(pendingImportPreview.draft);
+
+      if (pendingImportPreview.mode === "replace") {
+        applyReplaceImport(materializedDraft);
+        window.alert("Import completato in modalità replace.");
+      } else {
+        applyMergeImport(
+          materializedDraft,
+          pendingImportPreview.entityReviews,
+          pendingImportPreview.mergedEntityTypes
+        );
+        window.alert("Import completato in modalità merge assistito.");
+      }
+
+      setPendingImportPreview(null);
+    } catch (error) {
+      console.error(error);
+      window.alert("Impossibile completare l'import. Controlla che il backup sia valido.");
+    } finally {
+      setIsApplyingImport(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  }
+
   function importData(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -2396,6 +2699,24 @@ export default function App() {
           throw new Error("Formato JSON non valido.");
         }
 
+        const draft = buildImportDraft(parsed as WorldDataWithImages);
+        const currentEntities = sanitizeEntities(rawEntities);
+        const currentEntityTypes = sanitizeEntityTypes(rawEntityTypes, currentEntities);
+        const mergedEntityTypes = mergeEntityTypesForImport(
+          currentEntityTypes,
+          draft.entityTypes ?? DEFAULT_ENTITY_TYPES
+        );
+
+        setPendingImportPreview({
+          fileName: file.name,
+          mode: "merge",
+          draft,
+          mergedEntityTypes,
+          entityReviews: classifyImportEntities(currentEntities, draft.entities),
+        });
+        return;
+
+        /*
        const importMode = window.prompt(
   [
     "Scegli modalità import:",
@@ -2419,14 +2740,6 @@ export default function App() {
           return;
         }
 
-        if (normalizedMode === "replace") {
-          await deleteAllImageAssets().catch((error) => {
-            console.error(error);
-          });
-        }
-
-        await importImageAssetsFromWorldData((parsed as WorldDataWithImages).imageAssets);
-
         const importedEntitiesRaw = sanitizeEntities(parsed.entities);
         const importedEntities = await Promise.all(
           importedEntitiesRaw.map(async (entity) => {
@@ -2445,6 +2758,8 @@ export default function App() {
             return entity;
           })
         );
+
+        await importImageAssetsFromWorldData((parsed as WorldDataWithImages).imageAssets);
 
         const importedEntityIdSet = new Set(importedEntities.map((entity) => entity.id));
         const importedEntityTypes = sanitizeEntityTypes(
@@ -2481,6 +2796,15 @@ export default function App() {
           );
 
         if (normalizedMode === "replace") {
+          const currentAssetIds = getAssetIdsFromImageRefs(
+            entities.map((entity) => entity.image)
+          );
+          const importedAssetIds = new Set(
+            getAssetIdsFromImageRefs(importedEntities.map((entity) => entity.image))
+          );
+          const obsoleteAssetIds = currentAssetIds.filter(
+            (assetId) => !importedAssetIds.has(assetId)
+          );
           setRawEntityTypes(importedEntityTypes);
           setRawEntities(importedEntities);
           setRawRelations(importedRelations);
@@ -2506,6 +2830,10 @@ export default function App() {
           setGraphTypeFilters(buildDefaultGraphTypeFilters(importedEntityTypes));
           setIsFloatingCreateOpen(false);
 
+          void deleteImageAssetsByIds(obsoleteAssetIds).catch((error) => {
+            console.error(error);
+          });
+
           alert("Import completato in modalità replace.");
           return;
         }
@@ -2522,20 +2850,17 @@ export default function App() {
         const nextEntities = [...currentEntities];
         const idMap = new Map<string, string>();
         const usedIds = new Set(nextEntities.map((entity) => entity.id));
+        const currentEntitiesById = new Map(
+          nextEntities.map((entity) => [entity.id, entity] as const)
+        );
 
         const exactNameMap = new Map<string, Entity>();
-        const metadataMap = new Map<string, Entity>();
 
         nextEntities.forEach((entity) => {
           exactNameMap.set(
             `${entity.type}::${normalizeEntityName(entity.name).toLowerCase()}`,
             entity
           );
-
-          const metadataFingerprint = normalizeMetadataFingerprint(entity.metadata);
-          if (metadataFingerprint !== "[]") {
-            metadataMap.set(`${entity.type}::${metadataFingerprint}`, entity);
-          }
         });
 
         importedEntities.forEach((importedEntity) => {
@@ -2543,14 +2868,9 @@ export default function App() {
             importedEntity.name
           ).toLowerCase()}`;
 
-          const metadataFingerprint = normalizeMetadataFingerprint(importedEntity.metadata);
-          const metadataKey = `${importedEntity.type}::${metadataFingerprint}`;
-
+          const sameById = currentEntitiesById.get(importedEntity.id);
           const sameByName = exactNameMap.get(normalizedNameKey);
-          const sameByMetadata =
-            metadataFingerprint !== "[]" ? metadataMap.get(metadataKey) : undefined;
-
-          const matchedEntity = sameByName ?? sameByMetadata;
+          const matchedEntity = sameById ?? sameByName;
 
           if (matchedEntity) {
             const mergedEntity: Entity = {
@@ -2573,11 +2893,8 @@ export default function App() {
               nextEntities[index] = mergedEntity;
             }
 
+            currentEntitiesById.set(mergedEntity.id, mergedEntity);
             exactNameMap.set(normalizedNameKey, mergedEntity);
-
-            if (metadataFingerprint !== "[]") {
-              metadataMap.set(metadataKey, mergedEntity);
-            }
 
             idMap.set(importedEntity.id, matchedEntity.id);
             return;
@@ -2599,16 +2916,12 @@ export default function App() {
           usedIds.add(entityToInsert.id);
           nextEntities.push(entityToInsert);
           idMap.set(importedEntity.id, entityToInsert.id);
+          currentEntitiesById.set(entityToInsert.id, entityToInsert);
 
           exactNameMap.set(
             `${entityToInsert.type}::${normalizeEntityName(entityToInsert.name).toLowerCase()}`,
             entityToInsert
           );
-
-          const insertedFingerprint = normalizeMetadataFingerprint(entityToInsert.metadata);
-          if (insertedFingerprint !== "[]") {
-            metadataMap.set(`${entityToInsert.type}::${insertedFingerprint}`, entityToInsert);
-          }
         });
 
         const relationSignatureSet = new Set(
@@ -2671,6 +2984,7 @@ export default function App() {
         setGraphTypeFilters(buildDefaultGraphTypeFilters(mergedEntityTypes));
 
         alert("Import completato in modalità merge.");
+        */
       } catch (error) {
         console.error(error);
         alert("Impossibile importare il file. Controlla che sia un backup JSON valido.");
@@ -2834,6 +3148,189 @@ export default function App() {
     );
   }
 
+  function addAutomationRule() {
+    setRelationAutomationRules((current) => [
+      ...current,
+      {
+        id: crypto.randomUUID(),
+        label: "Nuova regola",
+        enabled: true,
+        sourceEntityType: "all",
+        sourceMetadataKey: "",
+        targetEntityType: "all",
+        targetMetadataKey: "",
+        relationType: "",
+        inverseType: "",
+        mode: "suggest",
+      },
+    ]);
+  }
+
+  function updateAutomationRule(ruleId: string, patch: Partial<RelationAutomationRule>) {
+    setRelationAutomationRules((current) =>
+      current.map((rule) => (rule.id === ruleId ? { ...rule, ...patch } : rule))
+    );
+  }
+
+  function deleteAutomationRule(ruleId: string) {
+    setRelationAutomationRules((current) => current.filter((rule) => rule.id !== ruleId));
+  }
+
+  function applyRelationSuggestion(suggestion: RelationSuggestion) {
+    const signature = [
+      suggestion.sourceEntity.id,
+      suggestion.targetEntity.id,
+      normalizeRelationType(suggestion.relationType),
+      normalizeOptionalRelationType(suggestion.inverseType) ?? "",
+    ].join("::");
+
+    const alreadyExists = relations.some(
+      (relation) =>
+        [
+          relation.fromEntityId,
+          relation.toEntityId,
+          normalizeRelationType(relation.type),
+          normalizeOptionalRelationType(relation.inverseType) ?? "",
+        ].join("::") === signature
+    );
+
+    if (alreadyExists) return;
+
+    setRawRelations((current) => [
+      {
+        id: crypto.randomUUID(),
+        fromEntityId: suggestion.sourceEntity.id,
+        toEntityId: suggestion.targetEntity.id,
+        type: normalizeRelationType(suggestion.relationType),
+        inverseType: normalizeOptionalRelationType(suggestion.inverseType),
+        source: "manual",
+      },
+      ...sanitizeRelations(current),
+    ]);
+  }
+
+  function applyAllRelationSuggestions() {
+    setRawRelations((current) => {
+      const existing = sanitizeRelations(current);
+      const signatures = new Set(
+        existing.map((relation) =>
+          [
+            relation.fromEntityId,
+            relation.toEntityId,
+            normalizeRelationType(relation.type),
+            normalizeOptionalRelationType(relation.inverseType) ?? "",
+          ].join("::")
+        )
+      );
+
+      const additions: Relation[] = [];
+      relationSuggestions.forEach((suggestion) => {
+        const signature = [
+          suggestion.sourceEntity.id,
+          suggestion.targetEntity.id,
+          normalizeRelationType(suggestion.relationType),
+          normalizeOptionalRelationType(suggestion.inverseType) ?? "",
+        ].join("::");
+        if (signatures.has(signature)) return;
+        signatures.add(signature);
+        additions.push({
+          id: crypto.randomUUID(),
+          fromEntityId: suggestion.sourceEntity.id,
+          toEntityId: suggestion.targetEntity.id,
+          type: normalizeRelationType(suggestion.relationType),
+          inverseType: normalizeOptionalRelationType(suggestion.inverseType),
+          source: "manual",
+        });
+      });
+
+      return [...additions, ...existing];
+    });
+  }
+
+  function saveWorkspacePreset() {
+    const nextPreset: WorkspacePreset = {
+      id: crypto.randomUUID(),
+      label: `Workspace ${workspacePresets.length + 1}`,
+      semanticView,
+      graphViewMode,
+      graphFilter,
+      graphViewType,
+      graphViewTag,
+      graphRelationFilter,
+      graphNeighborhoodDepth,
+      graphTypeFilters,
+    };
+
+    setWorkspacePresets((current) => [...current, nextPreset]);
+  }
+
+  function loadWorkspacePreset(presetId: string) {
+    const preset = workspacePresets.find((item) => item.id === presetId);
+    if (!preset) return;
+
+    setSemanticView(preset.semanticView);
+    setGraphViewMode(preset.graphViewMode as GraphViewMode);
+    setGraphFilter(preset.graphFilter as FocusedGraphFilter);
+    setGraphViewType(preset.graphViewType as "all" | EntityType);
+    setGraphViewTag(preset.graphViewTag);
+    setGraphRelationFilter(preset.graphRelationFilter);
+    setGraphNeighborhoodDepth(preset.graphNeighborhoodDepth as GraphNeighborhoodDepth);
+    setGraphTypeFilters(preset.graphTypeFilters);
+  }
+
+  function deleteWorkspacePreset(presetId: string) {
+    setWorkspacePresets((current) => current.filter((item) => item.id !== presetId));
+  }
+
+  async function exportNarrativePackage(params: {
+    packageType: "region" | "storyline" | "faction" | "cast";
+    seed: string;
+    label: string;
+  }) {
+    const seedEntity = entities.find((entity) => entity.id === params.seed);
+    if (!seedEntity) return;
+
+    const scoped = buildNarrativePackageScope({
+      packageType: params.packageType,
+      seedEntity,
+      entities,
+      relations,
+    });
+
+    const imageAssets = await collectImageAssetsForExport(
+      scoped.entities.map((entity) => entity.image ?? "")
+    );
+
+    const packageTypeSet = new Set(scoped.entities.map((entity) => entity.type));
+    const packageEntityTypes = entityTypes.filter((type) => packageTypeSet.has(type.id));
+    const data: WorldDataWithImages = {
+      version: WORLD_DATA_VERSION,
+      entityTypes: packageEntityTypes,
+      entities: scoped.entities,
+      relations: scoped.relations,
+      imageAssets,
+      packageMeta: {
+        packageType: params.packageType,
+        seed: seedEntity.id,
+        label: params.label.trim(),
+        createdAt: new Date().toISOString(),
+      },
+    };
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], {
+      type: "application/json",
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeLabel = params.label.trim().replace(/[^a-z0-9-_]+/gi, "-").toLowerCase();
+    link.href = url;
+    link.download = `worldbuilder-package-${safeLabel || "lore"}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setPackageModalOpen(false);
+  }
+
   const graphData = useMemo(() => {
     if (!selectedEntity) {
       return { nodes: [], edges: [] };
@@ -2841,37 +3338,37 @@ export default function App() {
 
     if (graphViewMode === "focused") {
       const focused = getActiveGraphEntitiesByFocusedMode(
-        entities,
-        relations,
+        semanticScope.entities,
+        semanticScope.relations,
         selectedEntity,
         graphFilter,
-        graphTypeFilters
+        graphTypeFilters,
+        graphNeighborhoodDepth,
+        graphRelationFilter
       );
 
       return buildGraphElements(
         focused.localEntities,
         focused.localRelations,
         entityTypes,
-        selectedEntity.id,
-        focused.level0Ids,
-        focused.level1Ids,
-        focused.level2Ids
+        selectedEntity.id
       );
     }
 
     if (graphViewMode === "global") {
-      const localEntities = entities.filter((entity) => graphTypeFilters[entity.type]);
+      const baseEntities = semanticScope.entities.filter((entity) => graphTypeFilters[entity.type]);
 
-      const allowedIds = new Set(localEntities.map((entity) => entity.id));
+      const allowedIds = new Set(baseEntities.map((entity) => entity.id));
 
-      const localRelations = relations.filter(
+      const localRelations = semanticScope.relations.filter(
         (relation) =>
+          relationMatchesGraphFilter(relation, graphRelationFilter) &&
           allowedIds.has(relation.fromEntityId) &&
           allowedIds.has(relation.toEntityId)
       );
 
       return buildGraphElements(
-        localEntities,
+        baseEntities,
         localRelations,
         entityTypes,
         selectedEntity.id
@@ -2881,13 +3378,14 @@ export default function App() {
     if (graphViewMode === "type-only") {
       const localEntities =
         graphViewType === "all"
-          ? entities
-          : entities.filter((entity) => entity.type === graphViewType);
+          ? semanticScope.entities
+          : semanticScope.entities.filter((entity) => entity.type === graphViewType);
 
       const allowedIds = new Set(localEntities.map((entity) => entity.id));
 
-      const localRelations = relations.filter(
+      const localRelations = semanticScope.relations.filter(
         (relation) =>
+          relationMatchesGraphFilter(relation, graphRelationFilter) &&
           allowedIds.has(relation.fromEntityId) &&
           allowedIds.has(relation.toEntityId)
       );
@@ -2903,15 +3401,16 @@ export default function App() {
     const normalizedTag = normalizeTag(graphViewTag);
 
     const localEntities = normalizedTag
-      ? entities.filter((entity) =>
+      ? semanticScope.entities.filter((entity) =>
           entity.tags.some((tag) => normalizeTag(tag) === normalizedTag)
         )
       : [];
 
     const allowedIds = new Set(localEntities.map((entity) => entity.id));
 
-    const localRelations = relations.filter(
+    const localRelations = semanticScope.relations.filter(
       (relation) =>
+        relationMatchesGraphFilter(relation, graphRelationFilter) &&
         allowedIds.has(relation.fromEntityId) &&
         allowedIds.has(relation.toEntityId)
     );
@@ -2923,25 +3422,42 @@ export default function App() {
       selectedEntity.id
     );
   }, [
-    entities,
-    relations,
+    semanticScope,
     entityTypes,
     selectedEntity,
     graphViewMode,
     graphFilter,
     graphTypeFilters,
+    graphNeighborhoodDepth,
+    graphRelationFilter,
     graphViewType,
     graphViewTag,
   ]);
 
   const showEmptyState = !selectedEntity;
+  const currentSemanticLabel =
+    SEMANTIC_VIEW_REGISTRY.find((item) => item.id === semanticView)?.label ?? "Vista libera";
+  const selectedEntityTypeLabel = selectedEntity
+    ? entityTypes.find((item) => item.id === selectedEntity.type)?.label ?? selectedEntity.type
+    : "";
+  const selectedEntityRelationCount = selectedEntityRelations.length;
 
-  return view === "dashboard" ? (
+  return view === "reader" ? (
+    <ReaderModeView
+      entityTypes={entityTypes}
+      entities={semanticScope.entities}
+      relations={semanticScope.relations}
+      selectedEntity={selectedEntity}
+      semanticView={semanticView}
+      onBack={() => setView("workspace")}
+      onSelectEntity={setSelectedId}
+    />
+  ) : view === "dashboard" ? (
     <div
       style={{
         ...pageStyle,
         background:
-          "radial-gradient(circle at top, rgba(59,130,246,0.08), transparent 24%), linear-gradient(180deg, #0b1020 0%, #111827 100%)",
+          "radial-gradient(circle at top left, rgba(201,166,107,0.08), transparent 18%), radial-gradient(circle at 82% 0%, rgba(127,158,199,0.1), transparent 20%), linear-gradient(180deg, #09090d 0%, #0d1016 42%, #0b1118 100%)",
       }}
     >
       <div style={pageContainerStyle}>
@@ -2968,7 +3484,7 @@ export default function App() {
       style={{
         ...pageStyle,
         background:
-          "radial-gradient(circle at top, rgba(59,130,246,0.08), transparent 24%), linear-gradient(180deg, #0b1020 0%, #111827 100%)",
+          "radial-gradient(circle at 20% 30%, rgba(80,120,255,0.16), transparent 0, transparent 28%), radial-gradient(circle at 80% 70%, rgba(255,140,80,0.1), transparent 0, transparent 24%), radial-gradient(circle at 55% 0%, rgba(120,255,220,0.07), transparent 0, transparent 22%), linear-gradient(180deg, #05070d 0%, #080b12 42%, #0a0f18 100%)",
       }}
     >
       <div style={pageContainerStyle}>
@@ -2980,6 +3496,9 @@ export default function App() {
           graphTypeFilters={graphTypeFilters}
           graphViewType={graphViewType}
           graphViewTag={graphViewTag}
+          graphRelationFilter={graphRelationFilter}
+          graphNeighborhoodDepth={graphNeighborhoodDepth}
+          semanticView={semanticView}
           allTags={allTags}
           graphData={graphData}
           onGraphViewModeChange={setGraphViewMode}
@@ -2987,6 +3506,9 @@ export default function App() {
           onToggleGraphTypeFilter={toggleGraphTypeFilter}
           onGraphViewTypeChange={setGraphViewType}
           onGraphViewTagChange={setGraphViewTag}
+          onGraphRelationFilterChange={setGraphRelationFilter}
+          onGraphNeighborhoodDepthChange={setGraphNeighborhoodDepth}
+          onSemanticViewChange={setSemanticView}
           onNodeClick={setSelectedId}
           getEntityById={getEntityById}
           onBackToWorkspace={() => setView("workspace")}
@@ -3019,83 +3541,677 @@ export default function App() {
         <div
           style={{
             marginBottom: "20px",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "flex-start",
-            gap: "16px",
-            flexWrap: "wrap",
+            display: "grid",
+            gap: "22px",
           }}
         >
-          <div>
-            <h1 style={{ margin: 0, fontSize: "32px" }}>Worldbuilder</h1>
-            <p style={{ margin: "6px 0 0 0", color: "#9ca3af" }}>
-              Prototipo locale per worldbuilding visuale e rapido, pensato per D&amp;D.
-            </p>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: isCompactTopBar
+                    ? "1fr"
+                    : "minmax(0, 1.78fr) minmax(320px, 0.92fr)",
+                  gap: 28,
+                  alignItems: "stretch",
+                  padding: "8px 0 18px",
+                  borderBottom: "1px solid rgba(255,255,255,0.08)",
+                }}
+              >
+              <div
+                style={{
+                  display: "grid",
+                  gap: 18,
+                  alignContent: "start",
+                  paddingRight: isCompactTopBar ? 0 : 18,
+                }}
+              >
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                  width: "fit-content",
+                  fontSize: 11,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.18em",
+                  color: cinematicTypography.gold,
+                  fontWeight: 800,
+                }}
+              >
+                Workspace narrativo
+              </div>
+              <div style={{ display: "grid", gap: 8 }}>
+                <h1
+                  style={{
+                    margin: 0,
+                    fontFamily: cinematicTypography.displayFont,
+                    fontSize: isCompactTopBar ? 40 : 54,
+                    lineHeight: 0.98,
+                    color: cinematicTypography.inkStrong,
+                    maxWidth: 840,
+                  }}
+                >
+                  Worldbuilder
+                </h1>
+                <p
+                  style={{
+                    margin: 0,
+                    color: cinematicTypography.ink,
+                    maxWidth: 760,
+                    lineHeight: 1.78,
+                    fontSize: 15,
+                  }}
+                >
+                  Costruisci il tuo mondo come un atlante narrativo moderno: indice, schede,
+                  relazioni, timeline e viste semantiche convivono in uno spazio di lavoro piu
+                  aperto, con un focus centrale piu forte e meno rumore da dashboard.
+                </p>
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 22,
+                  flexWrap: "wrap",
+                  alignItems: "flex-start",
+                }}
+              >
+                {[
+                  {
+                    label: "Archivio",
+                    value: `${entities.length}`,
+                    helper: "entita in archivio",
+                  },
+                  {
+                    label: "Rete",
+                    value: `${relations.length}`,
+                    helper: "relazioni attive",
+                  },
+                  {
+                    label: "Vista",
+                    value: currentSemanticLabel,
+                    helper: "taglio semantico",
+                  },
+                ].map((item) => (
+                  <div
+                    key={item.label}
+                    style={{
+                      display: "grid",
+                      gap: 4,
+                      minWidth: 110,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 11,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                        color: cinematicTypography.inkSoft,
+                        fontWeight: 800,
+                      }}
+                    >
+                      {item.label}
+                    </span>
+                    <strong
+                      style={{
+                        fontFamily: cinematicTypography.displayFont,
+                        fontSize: item.label === "Vista" ? 22 : 28,
+                        lineHeight: 1.05,
+                        color: cinematicTypography.inkStrong,
+                      }}
+                    >
+                      {item.value}
+                    </strong>
+                    <span style={{ color: cinematicTypography.inkMuted, fontSize: 12 }}>
+                      {item.helper}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gap: 16,
+                alignContent: "start",
+                paddingLeft: isCompactTopBar ? 0 : 24,
+                borderLeft: isCompactTopBar ? "none" : "1px solid rgba(255,255,255,0.08)",
+              }}
+            >
+              <span
+                style={{
+                  fontSize: 11,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.18em",
+                  color: cinematicTypography.gold,
+                  fontWeight: 800,
+                }}
+              >
+                Focus attuale
+              </span>
+              {selectedEntity ? (
+                <>
+                  <div style={{ display: "grid", gap: 6 }}>
+                    <strong
+                      style={{
+                        fontFamily: cinematicTypography.displayFont,
+                        fontSize: 30,
+                        lineHeight: 1.04,
+                        color: cinematicTypography.inkStrong,
+                      }}
+                    >
+                      {selectedEntity.name}
+                    </strong>
+                    <span
+                      style={{
+                        color: cinematicTypography.inkMuted,
+                        fontSize: 12,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.14em",
+                      }}
+                    >
+                      {selectedEntityTypeLabel}
+                    </span>
+                  </div>
+                  <p
+                    style={{
+                      margin: 0,
+                      color: cinematicTypography.ink,
+                      fontSize: 14,
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    {selectedEntity.shortDescription?.trim()
+                      ? selectedEntity.shortDescription
+                      : "Apri la scheda per sviluppare dettagli, collegamenti e tono narrativo dell'entita selezionata."}
+                  </p>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 18,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "grid",
+                        gap: 4,
+                        minWidth: 82,
+                      }}
+                    >
+                      <span
+                        style={{
+                          color: cinematicTypography.inkSoft,
+                          fontSize: 11,
+                          textTransform: "uppercase",
+                          letterSpacing: "0.08em",
+                          fontWeight: 800,
+                        }}
+                      >
+                        Tag
+                      </span>
+                      <strong style={{ color: cinematicTypography.inkStrong, fontSize: 22 }}>
+                        {selectedEntity.tags.length}
+                      </strong>
+                    </div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gap: 4,
+                        minWidth: 98,
+                      }}
+                    >
+                      <span
+                        style={{
+                          color: cinematicTypography.inkSoft,
+                          fontSize: 11,
+                          textTransform: "uppercase",
+                          letterSpacing: "0.08em",
+                          fontWeight: 800,
+                        }}
+                      >
+                        Legami
+                      </span>
+                      <strong style={{ color: cinematicTypography.inkStrong, fontSize: 22 }}>
+                        {selectedEntityRelationCount}
+                      </strong>
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      paddingTop: 4,
+                      borderTop: "1px solid rgba(255,255,255,0.08)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        color: cinematicTypography.gold,
+                        fontSize: 11,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                        fontWeight: 800,
+                        marginBottom: 6,
+                      }}
+                    >
+                      Centro narrativo
+                    </div>
+                    <div style={{ color: cinematicTypography.ink, fontSize: 13, lineHeight: 1.65 }}>
+                      Questa entita e il suo contesto ora sono il fulcro della shell. Archivio e
+                      rail restano presenti, ma con un peso visivo secondario.
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <strong
+                    style={{
+                      fontFamily: cinematicTypography.displayFont,
+                      fontSize: 22,
+                      lineHeight: 1.1,
+                      color: cinematicTypography.inkStrong,
+                    }}
+                  >
+                    Nessuna entita selezionata
+                  </strong>
+                  <p
+                    style={{
+                      margin: 0,
+                      color: cinematicTypography.ink,
+                      fontSize: 14,
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    Scegli una voce dall'archivio o crea una nuova entita per dare subito un centro
+                    narrativo al workspace.
+                  </p>
+                </>
+              )}
+            </div>
           </div>
 
-          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={() => setView("dashboard")}
-              style={secondaryButtonLargeStyle}
-            >
-              Dashboard
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                if (!selectedId && entities.length > 0) {
-                  setSelectedId(entities[0].id);
-                }
-                setView("graph");
+          <div
+            style={{
+              display: "grid",
+              gap: 16,
+              padding: "0 0 18px",
+              borderBottom: "1px solid rgba(255,255,255,0.08)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: isCompactTopBar ? "stretch" : "center",
+                gap: 14,
+                flexWrap: "wrap",
               }}
-              style={secondaryButtonLargeStyle}
             >
-              Apri grafo
-            </button>
+                <div style={{ display: "grid", gap: 6 }}>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.18em",
+                    color: cinematicTypography.gold,
+                    fontWeight: 800,
+                  }}
+                >
+                  Azioni principali
+                </span>
+                <p
+                  style={{
+                    margin: 0,
+                    color: cinematicTypography.inkMuted,
+                    fontSize: 14,
+                    maxWidth: 680,
+                    lineHeight: 1.55,
+                  }}
+                >
+                  Mantieni il focus sul lavoro corrente; gli strumenti di import, export e gestione
+                  avanzata restano disponibili in un secondo livello piu ordinato.
+                </p>
+              </div>
 
-            <button
-              type="button"
-              onClick={() => handleOpenCreateEntity()}
-              style={primaryButtonLargeStyle}
-            >
-              + Nuova entità
-            </button>
+              <div
+                style={{
+                  display: "flex",
+                  gap: "10px",
+                  flexWrap: "wrap",
+                  justifyContent: isCompactTopBar ? "flex-start" : "flex-end",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => handleOpenCreateEntity()}
+                  style={{
+                    ...primaryButtonLargeStyle,
+                    minWidth: isCompactTopBar ? undefined : 168,
+                  }}
+                >
+                  + Nuova entita
+                </button>
 
-            <button type="button" onClick={exportData} style={successButtonLargeStyle}>
-              Export JSON
-            </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!selectedId && entities.length > 0) {
+                      setSelectedId(entities[0].id);
+                    }
+                    setView("graph");
+                  }}
+                  style={secondaryButtonLargeStyle}
+                >
+                  Apri grafo
+                </button>
 
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              style={purpleButtonLargeStyle}
-            >
-              Import JSON
-            </button>
+                <button
+                  type="button"
+                  onClick={() => setView("reader")}
+                  style={secondaryButtonLargeStyle}
+                  disabled={!selectedEntity}
+                >
+                  Modalita consultazione
+                </button>
 
-            <button type="button" onClick={resetAllData} style={secondaryButtonLargeStyle}>
-              Reset dati
-            </button>
+                <button
+                  type="button"
+                  onClick={() => setView("dashboard")}
+                  style={secondaryButtonLargeStyle}
+                >
+                  Dashboard
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsWorkspaceToolsOpen((current) => !current)}
+                  style={ghostButtonStyle}
+                >
+                  {isWorkspaceToolsOpen ? "Nascondi strumenti" : "Strumenti progetto"}
+                </button>
+              </div>
+            </div>
+
+            {isWorkspaceToolsOpen ? (
+              <div
+                style={{
+                  display: "grid",
+                  gap: 16,
+                  padding: "6px 0 0",
+                }}
+              >
+                <div style={{ display: "grid", gap: 4 }}>
+                  <strong
+                    style={{
+                      fontFamily: cinematicTypography.displayFont,
+                      fontSize: 24,
+                      color: cinematicTypography.inkStrong,
+                    }}
+                  >
+                    Strumenti progetto
+                  </strong>
+                  <p
+                    style={{
+                      margin: 0,
+                      color: cinematicTypography.inkMuted,
+                      fontSize: 14,
+                      lineHeight: 1.55,
+                    }}
+                  >
+                    Gestisci viste salvate, cambia il taglio semantico del workspace e accedi alle
+                    operazioni di import ed export senza sovraccaricare la testata.
+                  </p>
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <select
+                    value={semanticView}
+                    onChange={(event) => setSemanticView(event.target.value as SemanticViewId)}
+                    style={{
+                      minWidth: 220,
+                      padding: "12px 14px",
+                      borderRadius: 16,
+                      border: "1px solid rgba(255,255,255,0.08)",
+                      background: "rgba(255,255,255,0.04)",
+                      color: cinematicTypography.inkStrong,
+                      backdropFilter: "blur(18px)",
+                      WebkitBackdropFilter: "blur(18px)",
+                    }}
+                  >
+                    {SEMANTIC_VIEW_REGISTRY.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  {workspacePresets.length > 0 ? (
+                    <select
+                      defaultValue=""
+                      onChange={(event) => {
+                        if (event.target.value) {
+                          loadWorkspacePreset(event.target.value);
+                          event.currentTarget.value = "";
+                        }
+                      }}
+                      style={{
+                        minWidth: 220,
+                        padding: "12px 14px",
+                        borderRadius: 16,
+                        border: "1px solid rgba(255,255,255,0.08)",
+                        background: "rgba(255,255,255,0.04)",
+                        color: cinematicTypography.inkStrong,
+                        backdropFilter: "blur(18px)",
+                        WebkitBackdropFilter: "blur(18px)",
+                      }}
+                    >
+                      <option value="">Carica vista salvata</option>
+                      {workspacePresets.map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+
+                  <button type="button" onClick={saveWorkspacePreset} style={secondaryButtonLargeStyle}>
+                    Salva vista corrente
+                  </button>
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <button type="button" onClick={exportData} style={successButtonLargeStyle}>
+                    Esporta mondo
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setPackageModalOpen(true)}
+                    style={successButtonLargeStyle}
+                  >
+                    Esporta pacchetto
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    style={purpleButtonLargeStyle}
+                  >
+                    Importa mondo
+                  </button>
+
+                  <button type="button" onClick={resetAllData} style={secondaryButtonLargeStyle}>
+                    Reset dati
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
+
+        {showWorkspaceGuide ? (
+          <div
+            style={{
+              marginBottom: 16,
+              display: "grid",
+              gap: 16,
+              borderTop: "1px solid rgba(127,158,199,0.14)",
+              borderBottom: "1px solid rgba(127,158,199,0.14)",
+              background:
+                "radial-gradient(circle at top right, rgba(127,158,199,0.12), transparent 28%), rgba(255,255,255,0.02)",
+              padding: "20px 0",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                gap: 14,
+                flexWrap: "wrap",
+              }}
+            >
+              <div style={{ display: "grid", gap: 6, maxWidth: 860 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", color: cinematicTypography.gold }}>
+                  Avvio guidato
+                </div>
+                <div style={{ color: cinematicTypography.inkStrong, fontSize: 24, fontWeight: 800, lineHeight: 1.2 }}>
+                  Il workspace adesso respira come un atlante di lavoro.
+                </div>
+                <div style={{ color: cinematicTypography.ink, fontSize: 14, lineHeight: 1.7 }}>
+                  Se vuoi orientarti in fretta, parti da tre passi: definisci i tipi e i campi
+                  principali, collega subito le entita piu importanti e poi passa al grafo con un
+                  preset semantico.
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setWorkspaceGuideState({ dismissed: true })}
+                style={ghostButtonStyle}
+              >
+                Nascondi guida
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: 12,
+              }}
+            >
+              {[
+                {
+                  title: "1. Imposta la struttura",
+                  text: "Usa Archivio e Schema tipi per definire personaggi, luoghi, fazioni e i campi che ti servono davvero.",
+                },
+                {
+                  title: "2. Collega il nucleo del mondo",
+                  text: "Apri una scheda, compila i dettagli chiave e aggiungi subito le relazioni forti che rendono leggibile la lore.",
+                },
+                {
+                  title: "3. Leggi il mondo dal grafo",
+                  text: "Passa al grafo con preset come Politica, Genealogia o Eventi per ridurre il rumore e vedere i pattern principali.",
+                },
+              ].map((step) => (
+                <div
+                  key={step.title}
+                  style={{
+                    padding: "0 18px 0 0",
+                    borderRight: "1px solid rgba(255,255,255,0.06)",
+                    display: "grid",
+                    gap: 6,
+                  }}
+                >
+                  <div style={{ color: cinematicTypography.inkStrong, fontWeight: 800 }}>{step.title}</div>
+                  <div style={{ color: cinematicTypography.inkMuted, fontSize: 13, lineHeight: 1.65 }}>{step.text}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {isWorkspaceToolsOpen && workspacePresets.length > 0 ? (
+          <div
+            style={{
+                  display: "flex",
+                  gap: 18,
+                  flexWrap: "wrap",
+                  marginBottom: 16,
+                }}
+              >
+            {workspacePresets.map((preset) => (
+              <div
+                key={preset.id}
+                style={{
+                  display: "inline-flex",
+                  gap: 6,
+                  alignItems: "center",
+                  paddingBottom: 6,
+                  borderBottom: "1px solid rgba(255,255,255,0.08)",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => loadWorkspacePreset(preset.id)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: cinematicTypography.inkStrong,
+                    cursor: "pointer",
+                    fontWeight: 700,
+                  }}
+                >
+                  {preset.label}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deleteWorkspacePreset(preset.id)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: cinematicTypography.inkMuted,
+                    cursor: "pointer",
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
 
         {showEmptyState ? (
           <div
             style={{
               ...panelStyle,
-              maxWidth: 720,
+              maxWidth: 760,
               margin: "0 auto",
-              border: "1px solid #263244",
-              boxShadow: "0 16px 40px rgba(0,0,0,0.18)",
+              border: "1px solid rgba(216,194,152,0.08)",
+              boxShadow: "0 24px 60px rgba(4,7,12,0.18)",
               display: "grid",
-              gap: 16,
+              gap: 18,
+              padding: 24,
+              background: "rgba(255,255,255,0.045)",
+              backdropFilter: "blur(28px)",
+              WebkitBackdropFilter: "blur(28px)",
             }}
           >
             <div>
               <h2 style={{ marginBottom: 8 }}>Nessuna entità disponibile</h2>
-              <div style={{ color: "#9ca3af", fontSize: 14, lineHeight: 1.6 }}>
+              <div style={{ color: cinematicTypography.inkMuted, fontSize: 14, lineHeight: 1.6 }}>
                 Il progetto è vuoto. Crea la prima entità per iniziare.
               </div>
             </div>
@@ -3125,38 +4241,63 @@ export default function App() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "280px minmax(0, 1fr) 420px",
-              gap: "16px",
+              gridTemplateColumns: isStackedWorkspace
+                ? "minmax(0, 1fr)"
+                : isCompactWorkspace
+                ? "minmax(0, 1fr)"
+                : "286px minmax(0, 1.42fr) minmax(300px, 0.8fr)",
+              gap: isCompactWorkspace ? "20px" : "28px",
               alignItems: "start",
             }}
           >
-            <Sidebar
-              entityTypes={entityTypes}
-              entities={filteredEntities}
-              allTags={allTags}
-              selectedEntityId={selectedId}
-              searchTerm={search}
-              setSearchTerm={setSearch}
-              typeFilter={archiveTypeFilter === "all" ? "all" : archiveTypeFilter}
-              setTypeFilter={setArchiveTypeFilter}
-              tagFilter={tagFilter}
-              setTagFilter={setTagFilter}
-              sortMode={sortMode}
-              setSortMode={setSortMode}
-              onSelectEntity={(id) => {
-                setSelectedId(id);
-                setNewTag("");
+            <div
+              style={{
+                order: isCompactWorkspace ? 3 : 1,
+                minWidth: 0,
+                paddingRight: isCompactWorkspace ? 0 : 8,
               }}
-              isCreatingEntity={isCreatingEntity}
-              createEntityType={createEntityType}
-              onOpenCreateEntity={handleOpenCreateEntity}
-              onCancelCreateEntity={handleCancelCreateEntity}
-              onCreateEntity={handleCreateEntity}
-              onCreateEntityType={handleCreateEntityType}
-              searchInputRef={searchInputRef}
-            />
+            >
+              <Sidebar
+                entityTypes={entityTypes}
+                entities={filteredEntities}
+                allTags={allTags}
+                selectedEntityId={selectedId}
+                searchTerm={search}
+                setSearchTerm={setSearch}
+                typeFilter={archiveTypeFilter === "all" ? "all" : archiveTypeFilter}
+                setTypeFilter={setArchiveTypeFilter}
+                tagFilter={tagFilter}
+                setTagFilter={setTagFilter}
+                sortMode={sortMode}
+                setSortMode={setSortMode}
+                onSelectEntity={(id) => {
+                  setSelectedId(id);
+                  setNewTag("");
+                }}
+                isCreatingEntity={isCreatingEntity}
+                createEntityType={createEntityType}
+                onOpenCreateEntity={handleOpenCreateEntity}
+                onCancelCreateEntity={handleCancelCreateEntity}
+                onCreateEntity={handleCreateEntity}
+                onCreateEntityType={handleCreateEntityType}
+                onUpdateEntityType={handleUpdateEntityType}
+                onDeleteEntityType={handleDeleteEntityType}
+                searchInputRef={searchInputRef}
+              />
+            </div>
 
-            <div style={{ display: "grid", gap: "16px", minWidth: 0 }}>
+            <div
+              style={{
+                display: "grid",
+                gap: "22px",
+                minWidth: 0,
+                order: isCompactWorkspace ? 1 : 2,
+                alignContent: "start",
+                paddingInline: isCompactWorkspace ? 0 : "14px 18px",
+                borderLeft: isCompactWorkspace ? "none" : "1px solid rgba(255,255,255,0.06)",
+                borderRight: isCompactWorkspace ? "none" : "1px solid rgba(255,255,255,0.06)",
+              }}
+            >
               <EntityEditor
                 entityTypes={entityTypes}
                 entities={entities}
@@ -3176,12 +4317,25 @@ export default function App() {
                 }}
                 onCenterInGraph={() => setView("graph")}
               />
+            </div>
 
+            <div
+              style={{
+                display: "grid",
+                gap: "20px",
+                minWidth: 0,
+                order: isCompactWorkspace ? 2 : 3,
+                alignContent: "start",
+                paddingLeft: isCompactWorkspace ? 0 : 18,
+                borderLeft: isCompactWorkspace ? "none" : "1px solid rgba(255,255,255,0.08)",
+              }}
+            >
               <div
                 style={{
-                  ...panelStyle,
-                  border: "1px solid #263244",
-                  boxShadow: "0 16px 40px rgba(0,0,0,0.18)",
+                  display: "grid",
+                  gap: 14,
+                  paddingBottom: 16,
+                  borderBottom: "1px solid rgba(255,255,255,0.08)",
                 }}
               >
                 <div
@@ -3189,189 +4343,164 @@ export default function App() {
                     display: "flex",
                     justifyContent: "space-between",
                     alignItems: "center",
-                    gap: "12px",
+                    gap: 12,
                     flexWrap: "wrap",
-                    marginBottom: "12px",
                   }}
                 >
-                  <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                      <uiIcons.timeline size={18} />
-                      <h2 style={{ margin: 0 }}>Timeline eventi</h2>
+                  <div style={{ display: "grid", gap: 6 }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", color: cinematicTypography.gold }}>
+                      Rail contestuale
                     </div>
-                    <div
-                      style={{
-                        fontSize: "13px",
-                        color: "#9ca3af",
-                        marginTop: "4px",
-                      }}
-                    >
-                      Lista cronologica degli eventi. Click su un evento per aprire la scheda.
+                    <div style={{ color: cinematicTypography.inkStrong, fontWeight: 800, fontSize: 15 }}>
+                      Un pannello attivo per volta, cosi il contesto pesa meno del focus.
                     </div>
                   </div>
 
-                  <select
-                    value={timelinePeriodFilter}
-                    onChange={(e) => setTimelinePeriodFilter(e.target.value)}
-                    style={{
-                      minWidth: "220px",
-                      padding: "10px 12px",
-                      borderRadius: "10px",
-                      border: "1px solid #374151",
-                      backgroundColor: "#111827",
-                      color: "#f3f4f6",
-                    }}
-                  >
-                    <option value="all">Tutte le epoche</option>
-                    {timelinePeriods.map((period) => (
-                      <option key={period} value={period}>
-                        {period}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {filteredTimelineEvents.length === 0 ? (
                   <div
                     style={{
-                      backgroundColor: "#111827",
-                      border: "1px solid #374151",
-                      borderRadius: "14px",
-                      padding: "14px",
-                      color: "#9ca3af",
-                      fontSize: "14px",
+                      display: "flex",
+                      gap: 8,
+                      flexWrap: "wrap",
+                      justifyContent: "flex-end",
                     }}
                   >
-                    Nessun evento trovato per il filtro selezionato.
-                  </div>
-                ) : (
-                  <div style={{ display: "grid", gap: "10px" }}>
-                    {filteredTimelineEvents.map((event) => {
-                      const isSelected = selectedEntity.id === event.entity.id;
-                      const EventIcon = getEntityTypeIcon(event.entity.type);
-
+                    {workspaceRailTabs.map((tab) => {
+                      const isActive = workspaceRailView === tab.id;
                       return (
                         <button
-                          key={event.entity.id}
+                          key={tab.id}
                           type="button"
-                          onClick={() => setSelectedId(event.entity.id)}
-                          style={timelineItemStyle(isSelected)}
+                          onClick={() => setWorkspaceRailView(tab.id)}
+                          style={{
+                            padding: "10px 12px",
+                            borderRadius: 0,
+                            border: "none",
+                            borderBottom: isActive
+                              ? "2px solid rgba(127,158,199,0.28)"
+                              : "2px solid transparent",
+                            background: "transparent",
+                            color: cinematicTypography.inkStrong,
+                            cursor: "pointer",
+                            display: "grid",
+                            gap: 2,
+                            minWidth: 118,
+                            textAlign: "left",
+                            paddingBottom: 8,
+                          }}
                         >
-                          <div
-                            style={{
-                              display: "flex",
-                              justifyContent: "space-between",
-                              alignItems: "center",
-                              gap: "10px",
-                              flexWrap: "wrap",
-                              marginBottom: "8px",
-                            }}
-                          >
-                            <div
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "10px",
-                                minWidth: 0,
-                              }}
-                            >
-                              <div
-                                style={{
-                                  width: 28,
-                                  height: 28,
-                                  borderRadius: "10px",
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  background: "rgba(59,130,246,0.14)",
-                                  border: "1px solid rgba(59,130,246,0.24)",
-                                  flexShrink: 0,
-                                }}
-                              >
-                                <EventIcon size={15} />
-                              </div>
-
-                              <div style={{ fontWeight: 700, fontSize: "15px", minWidth: 0 }}>
-                                {event.entity.name}
-                              </div>
-                            </div>
-
-                            {event.stato ? (
-                              <span
-                                style={timelineBadgeStyle(
-                                  getTimelineBadgeColor(event.stato)
-                                )}
-                              >
-                                {event.stato}
-                              </span>
-                            ) : null}
-                          </div>
-
-                          <div
-                            style={{
-                              display: "flex",
-                              flexWrap: "wrap",
-                              gap: "8px",
-                              marginBottom: "8px",
-                            }}
-                          >
-                            {event.anno ? (
-                              <span style={metaPillStyle()}>Anno: {event.anno}</span>
-                            ) : null}
-
-                            {event.epoca ? (
-                              <span style={metaPillStyle()}>Epoca: {event.epoca}</span>
-                            ) : null}
-
-                            {event.ordineCronologico ? (
-                              <span style={metaPillStyle()}>
-                                Ordine: {event.ordineCronologico}
-                              </span>
-                            ) : null}
-                          </div>
-
-                          {event.entity.shortDescription ? (
-                            <div style={{ fontSize: "13px", color: "#d1d5db" }}>
-                              {event.entity.shortDescription}
-                            </div>
-                          ) : null}
+                          <span style={{ fontWeight: 800, fontSize: 13 }}>{tab.label}</span>
+                          <span style={{ fontSize: 11, color: isActive ? cinematicTypography.ink : cinematicTypography.inkSoft }}>
+                            {tab.helper}
+                          </span>
                         </button>
                       );
                     })}
                   </div>
-                )}
+                </div>
               </div>
 
-              <RelationsPanel
-                entityTypes={entityTypes}
-                entities={entities}
-                relations={relations}
-                selectedEntity={selectedEntity}
-                availableRelationTargets={availableRelationTargets}
-                selectedEntityRelations={selectedEntityRelations}
-                relationType={relationType}
-                relationInverseType={relationInverseType}
-                relationTargetId={relationTargetId}
-                relationPresets={RELATION_PRESETS}
-                onRelationTypeChange={handleRelationTypeChange}
-                onRelationInverseTypeChange={setRelationInverseType}
-                onRelationTargetIdChange={setRelationTargetId}
-                onAddRelation={addRelation}
-                onDeleteRelation={deleteRelation}
-                getEntityById={getEntityById}
-              />
+              {workspaceRailView === "relations" ? (
+                <RelationsPanel
+                  entityTypes={entityTypes}
+                  entities={entities}
+                  relations={relations}
+                  selectedEntity={selectedEntity}
+                  availableRelationTargets={availableRelationTargets}
+                  selectedEntityRelations={selectedEntityRelations}
+                  relationType={relationType}
+                  relationInverseType={relationInverseType}
+                  relationTargetId={relationTargetId}
+                  relationPresets={RELATION_PRESETS}
+                  onRelationTypeChange={handleRelationTypeChange}
+                  onRelationInverseTypeChange={setRelationInverseType}
+                  onRelationTargetIdChange={setRelationTargetId}
+                  onAddRelation={addRelation}
+                  onDeleteRelation={deleteRelation}
+                  getEntityById={getEntityById}
+                />
+              ) : null}
+
+              {workspaceRailView === "timeline" ? (
+                <TimelineWorkbench
+                  events={timelineEvents}
+                  periods={timelinePeriods}
+                  periodFilter={timelinePeriodFilter}
+                  onPeriodFilterChange={setTimelinePeriodFilter}
+                  selectedEntityId={selectedEntity.id}
+                  onSelectEntity={setSelectedId}
+                  getStatusColor={getTimelineBadgeColor}
+                />
+              ) : null}
+
+              {workspaceRailView === "automation" ? (
+                <AutomationStudio
+                  entityTypes={entityTypes}
+                  rules={relationAutomationRules}
+                  suggestions={relationSuggestions}
+                  onAddRule={addAutomationRule}
+                  onUpdateRule={updateAutomationRule}
+                  onDeleteRule={deleteAutomationRule}
+                  onApplySuggestion={applyRelationSuggestion}
+                  onApplyAllSuggestions={applyAllRelationSuggestions}
+                />
+              ) : null}
             </div>
           </div>
         )}
       </div>
+
+      <ImportAssistantModal
+        open={Boolean(pendingImportPreview)}
+        fileName={pendingImportPreview?.fileName ?? ""}
+        mode={pendingImportPreview?.mode ?? "merge"}
+        draft={
+          pendingImportPreview?.draft ?? {
+            entityTypes: [],
+            entities: [],
+            relations: [],
+            imageAssets: [],
+          }
+        }
+        mergedEntityTypes={pendingImportPreview?.mergedEntityTypes ?? []}
+        entityReviews={pendingImportPreview?.entityReviews ?? []}
+        isApplying={isApplyingImport}
+        onModeChange={(mode) =>
+          setPendingImportPreview((current) =>
+            current
+              ? {
+                  ...current,
+                  mode,
+                }
+              : current
+          )
+        }
+        onCancel={() => {
+          setPendingImportPreview(null);
+          if (fileInputRef.current) {
+            fileInputRef.current.value = "";
+          }
+        }}
+        onConfirm={() => {
+          void applyPendingImportPreview();
+        }}
+      />
+
+      <NarrativePackageModal
+        open={packageModalOpen}
+        entities={entities}
+        onClose={() => setPackageModalOpen(false)}
+        onExport={(params) => {
+          void exportNarrativePackage(params);
+        }}
+      />
 
       {!showEmptyState ? (
         <div
           ref={floatingMenuRef}
           style={{
             position: "fixed",
-            right: "24px",
-            bottom: "24px",
+            right: isCompactWorkspace ? "16px" : "24px",
+            bottom: isCompactWorkspace ? "16px" : "24px",
             zIndex: 60,
             display: "grid",
             gap: "10px",
@@ -3383,11 +4512,13 @@ export default function App() {
               style={{
                 display: "grid",
                 gap: "8px",
-                backgroundColor: "#111827",
-                border: "1px solid #374151",
+                background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(255,255,255,0.08)",
                 borderRadius: "16px",
                 padding: "12px",
-                boxShadow: "0 20px 40px rgba(0,0,0,0.32)",
+                boxShadow: "0 20px 40px rgba(0,0,0,0.24)",
+                backdropFilter: "blur(24px)",
+                WebkitBackdropFilter: "blur(24px)",
                 minWidth: "220px",
               }}
             >
@@ -3427,17 +4558,19 @@ export default function App() {
             aria-label="Apri creazione rapida"
             onClick={() => setIsFloatingCreateOpen((current) => !current)}
             style={{
-              width: "62px",
-              height: "62px",
+              width: isCompactWorkspace ? "56px" : "62px",
+              height: isCompactWorkspace ? "56px" : "62px",
               borderRadius: "999px",
-              border: "none",
-              backgroundColor: "#2563eb",
-              color: "#ffffff",
-              fontSize: "34px",
+              border: "1px solid rgba(146,182,255,0.22)",
+              background: "rgba(255,255,255,0.08)",
+              color: "#f4f7ff",
+              fontSize: isCompactWorkspace ? "30px" : "34px",
               lineHeight: 1,
               cursor: "pointer",
-              boxShadow: "0 18px 38px rgba(37,99,235,0.35)",
+              boxShadow: "0 18px 38px rgba(0,0,0,0.26), 0 0 24px rgba(100,150,255,0.12)",
               fontWeight: 500,
+              backdropFilter: "blur(24px)",
+              WebkitBackdropFilter: "blur(24px)",
             }}
           >
             {isFloatingCreateOpen ? "×" : "+"}

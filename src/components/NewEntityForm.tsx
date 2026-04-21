@@ -32,6 +32,8 @@ const formStyle: React.CSSProperties = {
   background:
     "linear-gradient(180deg, rgba(19,29,46,0.96) 0%, rgba(15,23,38,0.96) 100%)",
   marginTop: 12,
+  minWidth: 0,
+  overflow: "hidden",
 };
 
 const fieldWrapStyle: React.CSSProperties = {
@@ -65,6 +67,14 @@ const errorStyle: React.CSSProperties = {
   padding: "8px 10px",
 };
 
+function resolveInitialEntityType(
+  initialType: EntityType,
+  entityTypes: EntityTypeDefinition[]
+): EntityType {
+  const typeExists = entityTypes.some((item) => item.id === initialType);
+  return typeExists ? initialType : entityTypes[0]?.id ?? "luogo";
+}
+
 export default function NewEntityForm({
   entityTypes,
   entities,
@@ -72,7 +82,11 @@ export default function NewEntityForm({
   onCreate,
   onCancel,
 }: NewEntityFormProps) {
-  const [type, setType] = useState<EntityType>(initialType);
+  const resolvedInitialType = useMemo(
+    () => resolveInitialEntityType(initialType, entityTypes),
+    [entityTypes, initialType]
+  );
+  const [type, setType] = useState<EntityType>(resolvedInitialType);
   const [name, setName] = useState("");
   const [shortDescription, setShortDescription] = useState("");
   const [error, setError] = useState("");
@@ -80,9 +94,12 @@ export default function NewEntityForm({
   const nameInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    const typeExists = entityTypes.some((item) => item.id === initialType);
-    setType(typeExists ? initialType : entityTypes[0]?.id ?? "luogo");
-  }, [initialType, entityTypes]);
+    const frame = window.requestAnimationFrame(() => {
+      setType(resolvedInitialType);
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [resolvedInitialType]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -144,7 +161,7 @@ export default function NewEntityForm({
     }
 
     setError("");
-    setType(entityTypes.some((item) => item.id === initialType) ? initialType : entityTypes[0]?.id ?? "luogo");
+    setType(resolvedInitialType);
     setName("");
     setShortDescription("");
   }
@@ -213,7 +230,7 @@ export default function NewEntityForm({
         Invio crea l'entità. ESC annulla.
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+      <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
         <button
           type="submit"
           disabled={!normalizedName || duplicateName}
@@ -222,12 +239,17 @@ export default function NewEntityForm({
             opacity: !normalizedName || duplicateName ? 0.6 : 1,
             cursor:
               !normalizedName || duplicateName ? "not-allowed" : "pointer",
+            flex: "1 1 140px",
           }}
         >
           Crea entità
         </button>
 
-        <button type="button" onClick={onCancel} style={cancelButtonStyle}>
+        <button
+          type="button"
+          onClick={onCancel}
+          style={{ ...cancelButtonStyle, flex: "1 1 110px" }}
+        >
           Annulla
         </button>
       </div>
